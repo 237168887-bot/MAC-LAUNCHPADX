@@ -6,25 +6,31 @@ struct LauncherView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Bindable var viewModel: LauncherViewModel
     @Bindable var settings: SettingsStore
+    let pointerRouter: LauncherPointerRouter
     @FocusState private var searchFocused: Bool
+    @State private var renameRecordID: UUID?
+    @State private var renameDraft = ""
+    @State private var pendingTrashRecordIDs: [UUID] = []
+    @State private var verticalGridTileFrames: [UUID: [CGRect]] = [:]
+    @State private var searchGridTileFrames: [UUID: [CGRect]] = [:]
 
-    init(viewModel: LauncherViewModel, settings: SettingsStore) {
+    init(viewModel: LauncherViewModel, settings: SettingsStore, pointerRouter: LauncherPointerRouter) {
         self.viewModel = viewModel
         self.settings = settings
+        self.pointerRouter = pointerRouter
     }
 
     var body: some View {
-        ZStack {
-            LauncherBackgroundView(settings: settings)
-            Color.clear
-                .contentShape(Rectangle())
-                .ignoresSafeArea()
-                .onTapGesture {
-                    handleBackgroundTap()
-                }
-
-            launcherCanvas
-
+        GeometryReader { viewport in
+            ZStack {
+                LauncherBackgroundView()
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture { handleBackgroundTap() }
+                launcherCanvas
+                    .frame(width: viewport.size.width, height: viewport.size.height, alignment: .top)
+            }
+            .frame(width: viewport.size.width, height: viewport.size.height)
         }
         .overlayPreferenceValue(FolderSourceAnchorKey.self) { anchors in
             GeometryReader { proxy in
@@ -34,9 +40,10 @@ struct LauncherView: View {
         }
         .background(
             TrackpadGestureMonitor(
+                gridMode: settings.gridMode,
                 reversesPageDirection: settings.reversePageDirection,
                 handleGesture: viewModel.handleTrackpadGesture,
-                onOptionPressed: viewModel.beginEditing,
+                onOptionStateChanged: viewModel.setOptionUninstallMode,
                 handleKeyDown: viewModel.handleKeyDown
             )
             .frame(width: 0, height: 0)
@@ -47,12 +54,16 @@ struct LauncherView: View {
                 viewModel.shouldFocusSearch = false
             }
         }
+        .onChange(of: viewModel.searchQuery) { _, _ in
+            pointerRouter.gridFrame = .zero
+            pointerRouter.tileFrames = []
+        }
+        .onChange(of: settings.gridMode) { _, _ in
+            pointerRouter.gridFrame = .zero
+            pointerRouter.tileFrames = []
+        }
         .onKeyPress(.escape) {
-            if viewModel.renamingFolderID != nil { viewModel.renamingFolderID = nil }
-            else if viewModel.openedFolderID != nil { viewModel.closeFolder() }
-            else if !viewModel.searchQuery.isEmpty { viewModel.searchQuery = "" }
-            else if viewModel.isEditing { viewModel.endEditing() }
-            else { viewModel.onDismiss?() }
+            viewModel.handleEscapeKey()
             return .handled
         }
         .alert(String(localized: "LaunchpadX Error"), isPresented: Binding(
@@ -61,8 +72,41 @@ struct LauncherView: View {
         )) {
             Button(String(localized: "OK"), role: .cancel) { viewModel.errorMessage = nil }
         } message: { Text(viewModel.errorMessage ?? "") }
+        .alert(String(localized: "Rename Application"), isPresented: Binding(
+            get: { renameRecordID != nil },
+            set: { if !$0 { renameRecordID = nil } }
+        )) {
+            TextField(String(localized: "Application name"), text: $renameDraft)
+            Button(String(localized: "Cancel"), role: .cancel) { renameRecordID = nil }
+            Button(String(localized: "Save")) {
+                if let renameRecordID { viewModel.renameApplication(recordID: renameRecordID, to: renameDraft) }
+                self.renameRecordID = nil
+            }
+        }
+        .confirmationDialog(
+            String(localized: "Move selected applications to Trash?"),
+            isPresented: Binding(
+                get: { !pendingTrashRecordIDs.isEmpty },
+                set: { if !$0 { pendingTrashRecordIDs = [] } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button(String(localized: "Move to Trash"), role: .destructive) {
+                let recordIDs = pendingTrashRecordIDs
+                pendingTrashRecordIDs = []
+                moveToTrash(recordIDs)
+            }
+            .accessibilityIdentifier("trash.confirm")
+            Button(String(localized: "Cancel"), role: .cancel) {
+                pendingTrashRecordIDs = []
+            }
+            .accessibilityIdentifier("trash.cancel")
+        } message: {
+            Text(String(localized: "These applications will be moved to the macOS Trash and can be restored from there. Application support data is left in place."))
+        }
         .accessibilityIdentifier("launcher.root")
         .accessibilityValue(viewModel.isEditing ? "editing" : "normal")
+        .accessibilityHint("\(settings.presentationMode == .window ? "window" : "full-screen"), \(settings.gridMode == .verticalScroll ? "vertical-scroll" : "pages")")
     }
 
     // Scope the presentation transaction to the overlay, not the application grid.
@@ -78,7 +122,9 @@ struct LauncherView: View {
                     .onDrop(of: [UTType.plainText], delegate: FolderOutsideDropDelegate(viewModel: viewModel))
                     .transition(.opacity)
                     .zIndex(0)
-                FolderOverlayView(viewModel: viewModel, folder: folder)
+                FolderOverlayView(viewModel: viewModel, folder: folder) { recordID in
+                    requestTrash([recordID])
+                }
                     .transition(reduceMotion ? .opacity : .scale(scale: 0.16)
                         .combined(with: .offset(x: origin.x - proxy.size.width / 2,
                                                 y: origin.y - proxy.size.height / 2))
@@ -96,20 +142,29 @@ struct LauncherView: View {
     private var launcherCanvas: some View {
         VStack(spacing: 0) {
             searchField
-                .padding(.top, 48)
-            Spacer(minLength: 24)
-            if viewModel.searchQuery.isEmpty {
+                .padding(.top, settings.presentationMode == .window ? 16 : 48)
+                .accessibilityIdentifier("launcher.search")
+            if viewModel.isMultiSelecting {
+                selectionControls
+            }
+            if !viewModel.searchQuery.isEmpty {
+                searchGrid
+                    .frame(maxHeight: .infinity)
+            } else if settings.gridMode == .verticalScroll {
+                verticalScrollGrid
+                    .frame(maxHeight: .infinity)
+            } else {
+                Spacer(minLength: 24)
                 PagedLauncherGrid(
                     viewModel: viewModel,
                     settings: settings,
+                    pointerRouter: pointerRouter,
                     onBackgroundTap: handleBackgroundTap,
                     entryView: entryView
                 )
-            } else {
-                searchGrid
+                Spacer(minLength: 20)
             }
-            Spacer(minLength: 20)
-            if viewModel.searchQuery.isEmpty, viewModel.pageCount > 1 {
+            if viewModel.searchQuery.isEmpty, settings.gridMode == .pages, viewModel.pageCount > 1 {
                 pageControl.padding(.bottom, 36)
             } else {
                 Color.clear.frame(height: 44)
@@ -117,6 +172,78 @@ struct LauncherView: View {
         }
         .padding(.horizontal, 42)
         .foregroundStyle(.white)
+    }
+
+    @ViewBuilder
+    private var selectionControls: some View {
+        HStack(spacing: 12) {
+            if viewModel.isMultiSelecting {
+                Spacer()
+                Text("已选择 \(viewModel.selectedApplicationRecordIDs.count) 个应用")
+                    .foregroundStyle(.white.opacity(0.8))
+                Button("全选") { viewModel.selectAllApplications() }
+                Button("隐藏") { viewModel.hideSelectedApplications() }
+                    .disabled(viewModel.selectedApplicationRecordIDs.isEmpty)
+                Button("Move to Trash") { requestTrash(viewModel.selectedApplicationRecordIDs) }
+                    .disabled(viewModel.selectedApplicationRecordIDs.isEmpty)
+                Button("完成") { viewModel.toggleMultiSelecting() }
+            }
+        }
+        .font(.system(size: 12, weight: .medium))
+        .buttonStyle(.bordered)
+        .padding(.top, 8)
+        .accessibilityIdentifier("launcher.selectionControls")
+    }
+
+    private var verticalScrollGrid: some View {
+        GeometryReader { geometry in
+            let spacing: CGFloat = 24
+            let columns = Self.responsiveColumnCount(
+                availableWidth: min(geometry.size.width, 1_280),
+                iconSize: settings.iconSize,
+                requested: settings.columns,
+                spacing: spacing
+            )
+            ScrollView(.vertical) {
+                LazyVGrid(
+                    columns: Array(repeating: GridItem(.flexible(minimum: settings.iconSize + 40, maximum: 156), spacing: spacing), count: columns),
+                    spacing: spacing
+                ) {
+                    ForEach(viewModel.allRootEntries) { entry in
+                        entryView(entry, isActivePage: true)
+                    }
+                }
+                .frame(maxWidth: 1_280)
+                .padding(.top, 28)
+                .padding(.bottom, 32)
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("launcher.verticalGrid.content")
+            }
+            .scrollIndicators(.hidden)
+            .onPreferenceChange(LauncherTileFramePreferenceKey.self) { frames in
+                verticalGridTileFrames = frames
+                if viewModel.searchQuery.isEmpty, settings.gridMode == .verticalScroll {
+                    pointerRouter.tileFrames = frames.values.flatMap { $0 }
+                }
+            }
+            .simultaneousGesture(
+                SpatialTapGesture(coordinateSpace: .global).onEnded { tap in
+                    guard !viewModel.isDraggingSession,
+                          !verticalGridTileFrames.values.joined().contains(where: { $0.contains(tap.location) }) else { return }
+                    handleBackgroundTap()
+                }
+            )
+            .frame(width: min(geometry.size.width, 1_360), height: geometry.size.height)
+            .frame(maxWidth: .infinity, alignment: .center)
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
+                if viewModel.searchQuery.isEmpty, settings.gridMode == .verticalScroll {
+                    pointerRouter.gridFrame = frame
+                }
+            }
+        }
+        .frame(maxWidth: 1_360)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("launcher.verticalGrid")
     }
 
     private var searchField: some View {
@@ -147,24 +274,65 @@ struct LauncherView: View {
     }
 
     private var searchGrid: some View {
-        LazyVGrid(
-            columns: Array(repeating: GridItem(.flexible(minimum: 102, maximum: 156), spacing: 30), count: settings.columns),
-            spacing: 30
-        ) {
-            ForEach(Array(viewModel.searchResults.prefix(9).enumerated()), id: \.element.id) { index, result in
-                SearchResultTile(
-                    result: result,
-                    image: viewModel.icon(for: result.application),
-                    iconSize: settings.iconSize,
-                    selected: index == viewModel.selectedSearchIndex
+        GeometryReader { geometry in
+            let spacing: CGFloat = 24
+            let columns = Self.responsiveColumnCount(
+                availableWidth: min(geometry.size.width, 1_280),
+                iconSize: settings.iconSize,
+                requested: settings.columns,
+                spacing: spacing
+            )
+            ScrollView(.vertical) {
+                LazyVGrid(
+                    columns: Array(repeating: GridItem(.flexible(minimum: settings.iconSize + 40, maximum: 156), spacing: spacing), count: columns),
+                    spacing: spacing
                 ) {
-                    viewModel.launch(result: result)
+                    ForEach(Array(viewModel.searchResults.prefix(9).enumerated()), id: \.element.id) { index, result in
+                        SearchResultTile(
+                            result: result,
+                            title: viewModel.snapshot.applicationAliases[result.recordID] ?? result.application.displayName,
+                            image: viewModel.icon(for: result.application),
+                            iconSize: settings.iconSize,
+                            selected: index == viewModel.selectedSearchIndex
+                        ) {
+                            viewModel.launch(result: result)
+                        }
+                    }
+                }
+                .frame(maxWidth: 1_280)
+                .padding(.vertical, 24)
+            }
+            .onPreferenceChange(LauncherTileFramePreferenceKey.self) { frames in
+                searchGridTileFrames = frames
+                if !viewModel.searchQuery.isEmpty {
+                    pointerRouter.tileFrames = frames.values.flatMap { $0 }
                 }
             }
+            .simultaneousGesture(
+                SpatialTapGesture(coordinateSpace: .global).onEnded { tap in
+                    guard !viewModel.isDraggingSession,
+                          !searchGridTileFrames.values.joined().contains(where: { $0.contains(tap.location) }) else { return }
+                    handleBackgroundTap()
+                }
+            )
+            .frame(width: min(geometry.size.width, 1_360), height: geometry.size.height)
+            .frame(maxWidth: .infinity)
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
+                if !viewModel.searchQuery.isEmpty { pointerRouter.gridFrame = frame }
+            }
         }
-        .frame(maxWidth: 1_280)
-        .padding(.horizontal, 40)
         .transition(.opacity)
+    }
+
+    nonisolated static func responsiveColumnCount(
+        availableWidth: CGFloat,
+        iconSize: Double,
+        requested: Int,
+        spacing: CGFloat = 24
+    ) -> Int {
+        let tileWidth = CGFloat(iconSize + 40)
+        let fitting = Int(max(0, availableWidth + spacing) / (tileWidth + spacing))
+        return max(1, min(requested, fitting))
     }
 
     @ViewBuilder
@@ -177,24 +345,52 @@ struct LauncherView: View {
             groupingImages: viewModel.groupingPreviewImages(for: entry),
             showsGroupingPreview: viewModel.groupingTargetID == entry.id,
             iconSize: settings.iconSize,
-            editing: viewModel.isEditing && isActivePage && !isDraggedEntry,
+            selected: entry.applicationRecordID.map(viewModel.selectedApplicationRecordIDs.contains) ?? false,
+            editing: viewModel.isEditing && isActivePage,
             onDragBegan: {
+                if !viewModel.isEditing { viewModel.beginEditing() }
                 viewModel.beginDraggingFromPress(entry)
             },
-            onDragMoved: {
-                viewModel.updateRootDragLocation($0, windowFrame: $1)
-            },
-            onDragEnded: {
-                viewModel.completeDraggingFromSourceIfNeeded()
-            }
         ) {
-            viewModel.open(entry)
+            if entry.kind == .folder { viewModel.open(entry) }
+            else if viewModel.isMultiSelecting { viewModel.toggleSelection(for: entry) }
+            else { viewModel.open(entry) }
         } onLongPress: {
             viewModel.beginEditing()
         }
-        .opacity(isDraggedEntry ? 0 : 1)
-        .allowsHitTesting(!isDraggedEntry)
+        .opacity(isDraggedEntry ? 0.28 : 1)
         .contextMenu { contextMenu(for: entry) }
+        .overlay(alignment: .topTrailing) {
+            if viewModel.isOptionUninstallMode,
+               let application = entry.application,
+               application.canMoveToTrash,
+               let recordID = entry.applicationRecordID {
+                Button { requestTrash([recordID]) } label: {
+                    Image(systemName: "minus.circle.fill")
+                        .font(.system(size: 22, weight: .semibold))
+                        .symbolRenderingMode(.palette)
+                        .foregroundStyle(.white, .red)
+                        .shadow(color: .black.opacity(0.65), radius: 3, y: 1)
+                        .frame(width: 40, height: 40)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .background {
+                    GeometryReader { proxy in
+                        Color.clear.preference(
+                            key: LauncherTileFramePreferenceKey.self,
+                            value: [recordID: [proxy.frame(in: .global)]]
+                        )
+                    }
+                }
+                .accessibilityLabel(String(localized: "Move to Trash"))
+                .accessibilityValue(entry.title)
+                .accessibilityIdentifier("uninstall.\(entry.id.uuidString)")
+                .padding(.top, -4)
+                .padding(.trailing, 8)
+                .zIndex(10)
+            }
+        }
 
         tile
             .anchorPreference(key: FolderSourceAnchorKey.self, value: .bounds) { anchor in
@@ -211,9 +407,14 @@ struct LauncherView: View {
     }
 
     @ViewBuilder private func contextMenu(for entry: LauncherEntry) -> some View {
-        if viewModel.isEditing, entry.kind == .application {
+        if entry.kind == .application {
+            Button(String(localized: "Rename Application")) { beginRename(entry) }
             Button(String(localized: "Hide Application")) { viewModel.hide(entry: entry) }
             Button(String(localized: "Show in Finder")) { viewModel.reveal(entry: entry) }
+            Divider()
+            Button(String(localized: "Move to Trash"), role: .destructive) {
+                if let recordID = entry.applicationRecordID { requestTrash([recordID]) }
+            }
         } else if viewModel.isEditing {
             Button(String(localized: "Rename Folder")) {
                 viewModel.beginRenamingFolder(entry)
@@ -221,17 +422,64 @@ struct LauncherView: View {
         }
     }
 
+    private func beginRename(_ entry: LauncherEntry) {
+        guard let recordID = entry.applicationRecordID else { return }
+        renameDraft = entry.customName ?? entry.application?.displayName ?? ""
+        renameRecordID = recordID
+    }
+
+    private func requestTrash<S: Sequence>(_ recordIDs: S) where S.Element == UUID {
+        let requestedIDs = Array(Set(recordIDs))
+        let validIDs = requestedIDs.filter {
+            viewModel.application(for: $0)?.canMoveToTrash == true
+        }
+        guard !validIDs.isEmpty else {
+            if !requestedIDs.isEmpty {
+                viewModel.presentError(NSError(
+                    domain: "LaunchpadX.Trash",
+                    code: 2,
+                    userInfo: [NSLocalizedDescriptionKey: String(localized: "System applications cannot be moved to Trash.")]
+                ))
+            }
+            return
+        }
+        pendingTrashRecordIDs = validIDs
+    }
+
+    private func moveToTrash(_ recordIDs: [UUID]) {
+        let applications = recordIDs.compactMap { recordID in
+            viewModel.application(for: recordID).map { (recordID, $0) }
+        }
+        guard !applications.isEmpty else { return }
+        NSWorkspace.shared.recycle(applications.map { $0.1.bundleURL }) { movedURLs, error in
+            DispatchQueue.main.async {
+                let movedPaths = Set(movedURLs.keys.map { $0.standardizedFileURL.path })
+                let movedIDs = applications.compactMap { recordID, app in
+                    movedPaths.contains(app.bundleURL.standardizedFileURL.path) ? recordID : nil
+                }
+                movedIDs.forEach(viewModel.removeApplication(recordID:))
+                if let error { viewModel.presentError(error) }
+                else if movedIDs.count < applications.count {
+                    viewModel.presentError(NSError(
+                        domain: "LaunchpadX.Trash",
+                        code: 1,
+                        userInfo: [NSLocalizedDescriptionKey: String(localized: "Some applications could not be moved to Trash.")]
+                    ))
+                }
+            }
+        }
+    }
+
     private func handleBackgroundTap() {
+        guard !viewModel.isDraggingSession else { return }
         if viewModel.isEditing {
             var transaction = Transaction(animation: nil)
             transaction.disablesAnimations = true
             withTransaction(transaction) {
                 viewModel.endEditing()
             }
-            if viewModel.openedFolderID != nil {
-                viewModel.closeFolder()
-            }
-        } else if viewModel.openedFolderID != nil { viewModel.closeFolder() }
+        }
+        if viewModel.openedFolderID != nil { viewModel.closeFolder() }
         else { viewModel.onDismiss?() }
     }
 
@@ -261,9 +509,11 @@ private struct PagedLauncherGrid<Content: View>: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Bindable var viewModel: LauncherViewModel
     @Bindable var settings: SettingsStore
+    let pointerRouter: LauncherPointerRouter
     let onBackgroundTap: () -> Void
     let entryView: (LauncherEntry, Bool) -> Content
     @State private var stableEntryFrames: [UUID: CGRect] = [:]
+    @State private var stableTileFrames: [UUID: [CGRect]] = [:]
     @State private var retainedPage: Int?
     @State private var pageReleaseTask: Task<Void, Never>?
     @State private var isPageTransitioning = false
@@ -291,12 +541,12 @@ private struct PagedLauncherGrid<Content: View>: View {
                     }
                 }
                 .offset(x: -CGFloat(viewModel.selectedPage) * proxy.size.width)
-                .animation(reduceMotion ? nil : .easeInOut(duration: 0.28), value: viewModel.selectedPage)
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: viewModel.selectedPage)
             }
             .simultaneousGesture(
-                SpatialTapGesture().onEnded { tap in
+                SpatialTapGesture(coordinateSpace: .global).onEnded { tap in
                     guard !isPageTransitioning else { return }
-                    guard !stableEntryFrames.values.contains(where: {
+                    guard !stableTileFrames.values.joined().contains(where: {
                         $0.contains(tap.location)
                     }) else { return }
                     onBackgroundTap()
@@ -310,8 +560,17 @@ private struct PagedLauncherGrid<Content: View>: View {
             stableEntryFrames = frames
             viewModel.rootEntryFrames = frames
         }
+        .onPreferenceChange(LauncherTileFramePreferenceKey.self) { frames in
+            stableTileFrames = frames
+            if viewModel.searchQuery.isEmpty, settings.gridMode == .pages {
+                pointerRouter.tileFrames = frames.values.flatMap { $0 }
+            }
+        }
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
             viewModel.rootGridFrame = frame
+            if viewModel.searchQuery.isEmpty, settings.gridMode == .pages {
+                pointerRouter.gridFrame = frame
+            }
         }
         .onAppear {
             retainedPage = viewModel.selectedPage
@@ -321,7 +580,7 @@ private struct PagedLauncherGrid<Content: View>: View {
             retainedPage = oldPage
             pageReleaseTask?.cancel()
             pageReleaseTask = Task { @MainActor in
-                try? await Task.sleep(for: .milliseconds(360))
+                try? await Task.sleep(for: .milliseconds(180))
                 guard !Task.isCancelled, viewModel.selectedPage == newPage else { return }
                 retainedPage = newPage
                 isPageTransitioning = false
@@ -372,7 +631,12 @@ private struct PagedLauncherGrid<Content: View>: View {
                         }
                 }
             }
-            .animation(isActivePage ? LaunchpadTheme.gridSpring : nil, value: entries.map(\.id))
+            .animation(
+                viewModel.isEditing && isActivePage && !isPageTransitioning
+                    ? LaunchpadTheme.gridSpring
+                    : nil,
+                value: entries.map(\.id)
+            )
             .frame(maxWidth: 1_280)
             .padding(.horizontal, 28)
             Spacer(minLength: 0)
@@ -392,6 +656,16 @@ private struct LauncherEntryFramePreferenceKey: PreferenceKey {
     }
 }
 
+private struct LauncherTileFramePreferenceKey: PreferenceKey {
+    static let defaultValue: [UUID: [CGRect]] = [:]
+
+    static func reduce(value: inout [UUID: [CGRect]], nextValue: () -> [UUID: [CGRect]]) {
+        for (id, rects) in nextValue() {
+            value[id, default: []].append(contentsOf: rects)
+        }
+    }
+}
+
 private struct AppTile: View {
     let entry: LauncherEntry
     let image: NSImage?
@@ -399,52 +673,20 @@ private struct AppTile: View {
     let groupingImages: [NSImage]
     let showsGroupingPreview: Bool
     let iconSize: Double
+    let selected: Bool
     let editing: Bool
     let onDragBegan: () -> Void
-    let onDragMoved: (NSPoint, CGRect) -> Void
-    let onDragEnded: () -> Void
     let action: () -> Void
     let onLongPress: () -> Void
 
     var body: some View {
-        ZStack {
-            Group {
-                if editing {
-                    tileContent
-                        .phaseAnimator(wigglePhases) { content, phase in
-                            content
-                                .rotationEffect(.degrees(phase ? wiggleAngle : -wiggleAngle))
-                                .offset(
-                                    x: phase ? wiggleTravel : -wiggleTravel,
-                                    y: phase ? -0.28 : 0.28
-                                )
-                        } animation: { _ in
-                            .easeInOut(duration: wiggleDuration)
-                        }
-                } else {
-                    tileContent
-                }
-            }
-
-            AppTilePressSurface(
-                longPressDuration: LaunchpadTheme.editingLongPressDuration,
-                editing: editing,
-                dragPayload: entry.id.uuidString,
-                dragImage: image ?? folderImages.first,
-                dragImageSize: iconSize,
-                onTap: action,
-                onLongPress: onLongPress,
-                onDragBegan: onDragBegan,
-                onDragMoved: onDragMoved,
-                onDragEnded: onDragEnded
-            )
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-        .contentShape(Rectangle())
+        tileContent
+        .fixedSize()
+        .rotationEffect(.degrees(editing ? wiggleAngle : 0))
         .animation(.spring(response: 0.24, dampingFraction: 0.82), value: showsGroupingPreview)
         .accessibilityLabel(entry.title)
         .accessibilityIdentifier("launcher.tile")
-        .accessibilityValue(editing ? "editing" : "normal")
+        .accessibilityValue(selected ? "selected" : (editing ? "editing" : "normal"))
         .accessibilityAddTraits(.isButton)
         .accessibilityAction(.default) {
             action()
@@ -453,7 +695,7 @@ private struct AppTile: View {
 
     private var tileContent: some View {
         VStack(spacing: 7) {
-            ZStack {
+            interactive(ZStack {
                 if entry.kind == .folder {
                     FolderPreview(images: folderImages, size: iconSize)
                 } else {
@@ -467,17 +709,67 @@ private struct AppTile: View {
                     FolderPreview(images: groupingImages, size: iconSize)
                         .transition(.scale(scale: 0.82).combined(with: .opacity))
                 }
+                if selected {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 22, weight: .semibold))
+                        .foregroundStyle(.white, Color.accentColor)
+                        .shadow(color: .black.opacity(0.3), radius: 4, y: 2)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                        .padding(3)
+                }
             }
-            .frame(width: iconSize, height: iconSize)
+            .frame(width: iconSize, height: iconSize))
             .compositingGroup()
-
-            Text(entry.title)
+            .background {
+                GeometryReader { proxy in
+                    Color.clear.preference(
+                        key: LauncherTileFramePreferenceKey.self,
+                        value: [entry.id: [proxy.frame(in: .global)]]
+                    )
+                }
+            }
+            interactive(Text(entry.title)
                 .font(.system(size: 12, weight: .regular))
                 .lineLimit(1)
                 .shadow(color: .black.opacity(0.85), radius: 2, y: 1)
-                .frame(width: iconSize + 40)
+                .frame(width: visibleTitleWidth)
+                .background {
+                    GeometryReader { proxy in
+                        Color.clear.preference(
+                            key: LauncherTileFramePreferenceKey.self,
+                            value: [entry.id: [proxy.frame(in: .global)]]
+                        )
+                    }
+                })
         }
         .scaleEffect(showsGroupingPreview ? 1.10 : 1)
+    }
+
+    private var visibleTitleWidth: CGFloat {
+        let font = NSFont.systemFont(ofSize: 12, weight: .regular)
+        let measuredWidth = (entry.title as NSString).size(withAttributes: [.font: font]).width
+        return min(CGFloat(iconSize + 40), max(1, ceil(measuredWidth)))
+    }
+
+    @ViewBuilder
+    private func interactive<Content: View>(_ content: Content) -> some View {
+        let dragSource = content.contentShape(Rectangle()).onDrag {
+                onDragBegan()
+                return NSItemProvider(object: entry.id.uuidString as NSString)
+            } preview: {
+                Image(nsImage: image ?? folderImages.first ?? NSImage())
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: iconSize, height: iconSize)
+            }
+        if editing {
+            dragSource.onTapGesture(perform: action)
+        } else {
+            dragSource.onTapGesture(perform: action)
+                .onLongPressGesture(minimumDuration: LaunchpadTheme.editingLongPressDuration) {
+                onLongPress()
+            }
+        }
     }
 
     private var wiggleSeed: Int {
@@ -488,235 +780,60 @@ private struct AppTile: View {
         0.72 + Double(wiggleSeed % 7) * 0.075
     }
 
-    private var wiggleTravel: Double {
-        0.22 + Double((wiggleSeed / 7) % 5) * 0.055
-    }
-
-    private var wiggleDuration: Double {
-        0.115 + Double((wiggleSeed / 11) % 5) * 0.009
-    }
-
-    private var wigglePhases: [Bool] {
-        if wiggleSeed.isMultiple(of: 2) {
-            [false, true]
-        } else {
-            [true, false]
-        }
-    }
-}
-
-private struct AppTilePressSurface: NSViewRepresentable {
-    let longPressDuration: TimeInterval
-    let editing: Bool
-    let dragPayload: String
-    let dragImage: NSImage?
-    let dragImageSize: CGFloat
-    let onTap: () -> Void
-    let onLongPress: () -> Void
-    let onDragBegan: () -> Void
-    let onDragMoved: (NSPoint, CGRect) -> Void
-    let onDragEnded: () -> Void
-
-    func makeNSView(context: Context) -> AppTilePressView {
-        let view = AppTilePressView()
-        view.longPressDuration = longPressDuration
-        view.editing = editing
-        view.dragPayload = dragPayload
-        view.dragImage = dragImage
-        view.dragImageSize = dragImageSize
-        view.onTap = onTap
-        view.onLongPress = onLongPress
-        view.onDragBegan = onDragBegan
-        view.onDragMoved = onDragMoved
-        view.onDragEnded = onDragEnded
-        return view
-    }
-
-    func updateNSView(_ nsView: AppTilePressView, context: Context) {
-        nsView.longPressDuration = longPressDuration
-        nsView.editing = editing
-        nsView.dragPayload = dragPayload
-        nsView.dragImage = dragImage
-        nsView.dragImageSize = dragImageSize
-        nsView.onTap = onTap
-        nsView.onLongPress = onLongPress
-        nsView.onDragBegan = onDragBegan
-        nsView.onDragMoved = onDragMoved
-        nsView.onDragEnded = onDragEnded
-    }
-}
-
-private final class AppTilePressView: NSView, NSDraggingSource {
-    var longPressDuration: TimeInterval = LaunchpadTheme.editingLongPressDuration
-    var editing = false
-    var dragPayload = ""
-    var dragImage: NSImage?
-    var dragImageSize: CGFloat = 94
-    var onTap: () -> Void = {}
-    var onLongPress: () -> Void = {}
-    var onDragBegan: () -> Void = {}
-    var onDragMoved: (NSPoint, CGRect) -> Void = { _, _ in }
-    var onDragEnded: () -> Void = {}
-
-    private var isTrackingPress = false
-    private var didTriggerLongPress = false
-    private var isReadyToDrag = false
-    private var didStartDragging = false
-    private var pressOrigin = NSPoint.zero
-    private var dragWindowFrame = NSRect.zero
-
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
-        true
-    }
-
-    override func mouseDown(with event: NSEvent) {
-        guard event.buttonNumber == 0 else { return }
-        cancelPress()
-        isTrackingPress = true
-        pressOrigin = convert(event.locationInWindow, from: nil)
-        if editing {
-            isReadyToDrag = true
-            return
-        }
-        perform(
-            #selector(triggerLongPress),
-            with: nil,
-            afterDelay: longPressDuration,
-            inModes: [.common]
-        )
-    }
-
-    override func mouseDragged(with event: NSEvent) {
-        guard isTrackingPress else { return }
-        let location = convert(event.locationInWindow, from: nil)
-        let distance = hypot(location.x - pressOrigin.x, location.y - pressOrigin.y)
-        if isReadyToDrag, !didStartDragging, distance > 4 {
-            beginDragging(with: event)
-        } else if !isReadyToDrag, distance > 18 {
-            cancelPress()
-        }
-    }
-
-    override func mouseUp(with event: NSEvent) {
-        guard isTrackingPress, !didStartDragging else { return }
-        let shouldTap = !didTriggerLongPress
-        cancelPress()
-        if shouldTap {
-            onTap()
-        }
-    }
-
-    override func viewWillMove(toWindow newWindow: NSWindow?) {
-        if newWindow == nil, !didStartDragging {
-            cancelPress()
-        }
-        super.viewWillMove(toWindow: newWindow)
-    }
-
-    @objc private func triggerLongPress() {
-        guard isTrackingPress else { return }
-        didTriggerLongPress = true
-        isReadyToDrag = true
-        onLongPress()
-    }
-
-    private func beginDragging(with event: NSEvent) {
-        guard !dragPayload.isEmpty else { return }
-        didStartDragging = true
-        NSObject.cancelPreviousPerformRequests(
-            withTarget: self,
-            selector: #selector(triggerLongPress),
-            object: nil
-        )
-
-        let pasteboardItem = NSPasteboardItem()
-        pasteboardItem.setString(
-            dragPayload,
-            forType: NSPasteboard.PasteboardType(UTType.plainText.identifier)
-        )
-        let draggingItem = NSDraggingItem(pasteboardWriter: pasteboardItem)
-        let size = min(dragImageSize, min(bounds.width, bounds.height))
-        draggingItem.setDraggingFrame(
-            NSRect(
-                x: (bounds.width - size) / 2,
-                y: isFlipped ? 0 : bounds.height - size,
-                width: size,
-                height: size
-            ),
-            contents: dragImage ?? NSImage()
-        )
-        dragWindowFrame = window?.frame ?? .zero
-        onDragBegan()
-        let session = beginDraggingSession(with: [draggingItem], event: event, source: self)
-        session.animatesToStartingPositionsOnCancelOrFail = false
-        session.draggingFormation = .none
-    }
-
-    func draggingSession(
-        _ session: NSDraggingSession,
-        sourceOperationMaskFor context: NSDraggingContext
-    ) -> NSDragOperation {
-        .move
-    }
-
-    func ignoreModifierKeys(for session: NSDraggingSession) -> Bool {
-        true
-    }
-
-    func draggingSession(_ session: NSDraggingSession, movedTo screenPoint: NSPoint) {
-        // Hit-test the pointer, not the dragging image's origin.
-        onDragMoved(NSEvent.mouseLocation, dragWindowFrame)
-    }
-
-    func draggingSession(
-        _ session: NSDraggingSession,
-        endedAt screenPoint: NSPoint,
-        operation: NSDragOperation
-    ) {
-        // The drop delegate normally commits first. This also clears or commits
-        // sessions that AppKit reports as moved without invoking performDrop.
-        onDragEnded()
-        cancelPress()
-    }
-
-    private func cancelPress() {
-        NSObject.cancelPreviousPerformRequests(
-            withTarget: self,
-            selector: #selector(triggerLongPress),
-            object: nil
-        )
-        isTrackingPress = false
-        didTriggerLongPress = false
-        isReadyToDrag = false
-        didStartDragging = false
-        dragWindowFrame = .zero
-    }
 }
 
 private struct SearchResultTile: View {
     let result: SearchResult
+    let title: String
     let image: NSImage
     let iconSize: Double
     let selected: Bool
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) {
-            VStack(spacing: 7) {
-                Image(nsImage: image)
-                    .resizable().interpolation(.high).scaledToFit()
-                    .frame(width: iconSize, height: iconSize)
-                Text(result.application.displayName)
-                    .font(.system(size: 12, weight: .regular))
-                    .lineLimit(1)
-                    .shadow(color: .black.opacity(0.85), radius: 2, y: 1)
-                    .frame(width: iconSize + 40)
-            }
-            .padding(8)
-            .background(selected ? .white.opacity(0.16) : .clear, in: RoundedRectangle(cornerRadius: 14))
+        VStack(spacing: 7) {
+            Image(nsImage: image)
+                .resizable().interpolation(.high).scaledToFit()
+                .frame(width: iconSize, height: iconSize)
+                .background {
+                    GeometryReader { proxy in
+                        Color.clear.preference(
+                            key: LauncherTileFramePreferenceKey.self,
+                            value: [result.recordID: [proxy.frame(in: .global)]]
+                        )
+                    }
+                }
+                .contentShape(Rectangle())
+                .onTapGesture(perform: action)
+
+            Text(title)
+                .font(.system(size: 12, weight: .regular))
+                .lineLimit(1)
+                .shadow(color: .black.opacity(0.85), radius: 2, y: 1)
+                .frame(width: visibleTitleWidth)
+                .background {
+                    GeometryReader { proxy in
+                        Color.clear.preference(
+                            key: LauncherTileFramePreferenceKey.self,
+                            value: [result.recordID: [proxy.frame(in: .global)]]
+                        )
+                    }
+                }
+                .contentShape(Rectangle())
+                .onTapGesture(perform: action)
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel(result.application.displayName)
+        .background(selected ? .white.opacity(0.16) : .clear, in: RoundedRectangle(cornerRadius: 14))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(title)
+        .accessibilityIdentifier("launcher.searchResult")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction(.default, action)
+    }
+
+    private var visibleTitleWidth: CGFloat {
+        let font = NSFont.systemFont(ofSize: 12, weight: .regular)
+        let measuredWidth = (title as NSString).size(withAttributes: [.font: font]).width
+        return min(CGFloat(iconSize + 40), max(1, ceil(measuredWidth)))
     }
 }
 
@@ -757,7 +874,10 @@ struct LauncherEntryDropDelegate: DropDelegate {
     }
 
     func performDrop(info: DropInfo) -> Bool {
-        viewModel.performDrop(on: entry)
+        return viewModel.performDrop(
+            on: entry,
+            grouping: Self.isGroupingLocation(info.location, iconSize: iconSize, tileWidth: tileWidth)
+        )
     }
 
     func dropUpdated(info: DropInfo) -> DropProposal? {
@@ -765,17 +885,24 @@ struct LauncherEntryDropDelegate: DropDelegate {
         return DropProposal(operation: .move)
     }
 
-    nonisolated static func isGroupingLocation(_ location: CGPoint, iconSize: Double) -> Bool {
-        let tileWidth = iconSize + 40
+    nonisolated static func isGroupingLocation(
+        _ location: CGPoint, iconSize: Double, tileWidth: CGFloat
+    ) -> Bool {
         let iconCenter = CGPoint(x: tileWidth / 2, y: iconSize / 2)
         let radius = iconSize * 0.38
         return hypot(location.x - iconCenter.x, location.y - iconCenter.y) <= radius
     }
 
+    private var tileWidth: CGFloat {
+        let font = NSFont.systemFont(ofSize: 12)
+        let labelWidth = ceil((entry.title as NSString).size(withAttributes: [.font: font]).width)
+        return max(CGFloat(iconSize), min(CGFloat(iconSize + 40), labelWidth))
+    }
+
     private func updateGroupingState(for info: DropInfo) {
         viewModel.dragMoved(
             over: entry,
-            grouping: Self.isGroupingLocation(info.location, iconSize: iconSize)
+            grouping: Self.isGroupingLocation(info.location, iconSize: iconSize, tileWidth: tileWidth)
         )
     }
 }
@@ -812,54 +939,12 @@ private struct LauncherGridBackgroundDropDelegate: DropDelegate {
 }
 
 private struct LauncherBackgroundView: View {
-    @Bindable var settings: SettingsStore
-    @State private var cachedImage: NSImage?
-    @State private var loadedSourceKey: String?
-
     var body: some View {
-        ZStack {
-            if loadedSourceKey == sourceKey, let image = cachedImage {
-                Image(nsImage: image).resizable().scaledToFill()
-            } else {
-                LinearGradient(colors: [LaunchpadTheme.desktop, LaunchpadTheme.violet.opacity(0.75)], startPoint: .topLeading, endPoint: .bottomTrailing)
-            }
-            Rectangle().fill(.black.opacity(0.43))
-            Rectangle().fill(.white.opacity(0.025))
-        }
-        .ignoresSafeArea()
-        .task(id: sourceKey) {
-            let key = sourceKey
-            cachedImage = await loadBackgroundImage()
-            guard !Task.isCancelled, sourceKey == key else { return }
-            loadedSourceKey = key
-        }
-    }
-
-    private var sourceKey: String {
-        switch settings.backgroundKind {
-        case .brandGradient:
-            "gradient"
-        case .wallpaper:
-            "wallpaper:\(NSScreen.main?.displayID ?? 0)"
-        case .customImage:
-            "custom:\(settings.customBackgroundPath ?? "")"
-        }
-    }
-
-    private func loadBackgroundImage() async -> NSImage? {
-        let url: URL?
-        switch settings.backgroundKind {
-        case .brandGradient:
-            return nil
-        case .wallpaper:
-            url = NSScreen.main.flatMap { NSWorkspace.shared.desktopImageURL(for: $0) }
-        case .customImage:
-            url = settings.customBackgroundPath.map(URL.init(fileURLWithPath:))
-        }
-        guard let url else { return nil }
-        let data = await Task.detached(priority: .utility) {
-            try? Data(contentsOf: url, options: .mappedIfSafe)
-        }.value
-        return data.flatMap(NSImage.init(data:))
+        Rectangle()
+            .fill(.clear)
+            .glassEffect(.regular.tint(.black.opacity(0.28)), in: Rectangle())
+            .overlay { Rectangle().fill(.black.opacity(0.30)) }
+            .overlay { Rectangle().fill(.white.opacity(0.035)) }
+            .ignoresSafeArea()
     }
 }

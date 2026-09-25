@@ -10,6 +10,267 @@ import XCTest
 
 final class LaunchpadXUITests: XCTestCase {
 
+    private func waitForHittable(_ element: XCUIElement, expected: Bool, timeout: TimeInterval = 5) -> Bool {
+        let predicate = NSPredicate(format: "hittable == %@", NSNumber(value: expected))
+        return XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: element)], timeout: timeout) == .completed
+    }
+
+    @MainActor
+    func testCustomLauncherHotKeyCanBeRecordedAndCancelled() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing-isolated-data", "--show-settings-for-ui-testing"]
+        app.launch()
+        app.activate()
+
+        let settingsWindow = app.windows["LaunchpadX"].firstMatch
+        XCTAssertTrue(settingsWindow.waitForExistence(timeout: 8))
+        XCTAssertTrue(app.switches["settings.launchAtLogin"].exists)
+        XCTAssertTrue(app.switches["settings.showMenuBarIcon"].exists)
+        app.staticTexts["快捷键"].firstMatch.click()
+
+        let recorder = app.buttons["settings.hotKeyRecorder"].firstMatch
+        XCTAssertTrue(recorder.waitForExistence(timeout: 5))
+        let original = recorder.label
+        recorder.click()
+        XCTAssertTrue(recorder.label.contains("请按下快捷键"), "Actual recorder label: \(recorder.label)")
+        app.typeKey(.escape, modifierFlags: [])
+        XCTAssertEqual(recorder.label, original)
+
+        recorder.click()
+        app.typeKey("k", modifierFlags: [.control, .shift])
+        XCTAssertEqual(recorder.label, "⌃⇧K")
+
+    }
+
+    @MainActor
+    func testClickingBlankGridClosesLauncher() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "--show-launcher-for-ui-testing", "--ui-testing-isolated-data",
+            "--ui-testing-fixtures", "--ui-testing-window-mode",
+        ]
+        app.launch()
+        app.activate()
+        let root = app.descendants(matching: .any).matching(identifier: "launcher.root").firstMatch
+        XCTAssertTrue(root.waitForExistence(timeout: 8))
+        app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.5)).click()
+        assertLauncherDismissedWithoutFailedLaunch(app, root: root)
+    }
+
+    @MainActor
+    func testClickingGapBetweenIconsClosesVerticalGrid() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "--show-launcher-for-ui-testing", "--ui-testing-isolated-data",
+            "--ui-testing-fixtures", "--ui-testing-window-mode", "--ui-testing-scroll-grid",
+        ]
+        app.launch()
+        app.activate()
+
+        let root = app.descendants(matching: .any).matching(identifier: "launcher.root").firstMatch
+        let first = app.buttons["Fixture 0"].firstMatch
+        let second = app.buttons["Fixture 1"].firstMatch
+        XCTAssertTrue(root.waitForExistence(timeout: 8))
+        XCTAssertTrue(first.waitForExistence(timeout: 5))
+        XCTAssertTrue(second.waitForExistence(timeout: 5))
+        clickGap(between: first, and: second, in: app.windows.firstMatch)
+        assertLauncherDismissedWithoutFailedLaunch(app, root: root)
+    }
+
+    @MainActor
+    func testClickingGapBetweenIconAndLabelClosesLauncher() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "--show-launcher-for-ui-testing", "--ui-testing-isolated-data",
+            "--ui-testing-fixtures", "--ui-testing-window-mode", "--ui-testing-scroll-grid",
+        ]
+        app.launch()
+        app.activate()
+
+        let root = app.descendants(matching: .any).matching(identifier: "launcher.root").firstMatch
+        let tileElements = app.buttons.matching(identifier: "launcher.tile")
+            .matching(NSPredicate(format: "label == %@", "Fixture 0"))
+        XCTAssertTrue(root.waitForExistence(timeout: 8))
+        XCTAssertGreaterThanOrEqual(tileElements.count, 2, app.debugDescription)
+        let iconFrame = tileElements.element(boundBy: 0).frame
+        let labelFrame = tileElements.element(boundBy: 1).frame
+        XCTAssertGreaterThan(labelFrame.minY, iconFrame.maxY)
+        let point = CGPoint(x: iconFrame.midX, y: (iconFrame.maxY + labelFrame.minY) / 2)
+        click(point, in: app.windows.firstMatch)
+        assertLauncherDismissedWithoutFailedLaunch(app, root: root)
+    }
+
+    @MainActor
+    func testClickingGapBetweenPagedIconsClosesLauncher() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "--show-launcher-for-ui-testing", "--ui-testing-isolated-data",
+            "--ui-testing-fixtures", "--ui-testing-window-mode",
+        ]
+        app.launch()
+        app.activate()
+
+        let root = app.descendants(matching: .any).matching(identifier: "launcher.root").firstMatch
+        let first = app.buttons["Fixture 0"].firstMatch
+        let second = app.buttons["Fixture 1"].firstMatch
+        XCTAssertTrue(root.waitForExistence(timeout: 8))
+        XCTAssertTrue(first.waitForExistence(timeout: 5))
+        XCTAssertTrue(second.waitForExistence(timeout: 5))
+        clickGap(between: first, and: second, in: app.windows.firstMatch)
+        assertLauncherDismissedWithoutFailedLaunch(app, root: root)
+    }
+
+    @MainActor
+    func testClickingIconRunsItsActionInsteadOfBackgroundDismissal() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "--show-launcher-for-ui-testing", "--ui-testing-isolated-data",
+            "--ui-testing-fixtures", "--ui-testing-window-mode", "--ui-testing-scroll-grid",
+        ]
+        app.launch()
+        app.activate()
+
+        let icon = app.buttons.matching(identifier: "launcher.tile").matching(NSPredicate(format: "label == %@", "Fixture 0")).element(boundBy: 0)
+        XCTAssertTrue(icon.waitForExistence(timeout: 8))
+        clickCenter(of: icon, in: app.windows.firstMatch)
+        XCTAssertTrue(app.sheets.firstMatch.waitForExistence(timeout: 5), app.debugDescription)
+    }
+
+    @MainActor
+    func testClickingIconLabelRunsItsActionInsteadOfBackgroundDismissal() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "--show-launcher-for-ui-testing", "--ui-testing-isolated-data",
+            "--ui-testing-fixtures", "--ui-testing-window-mode", "--ui-testing-scroll-grid",
+        ]
+        app.launch()
+        app.activate()
+
+        let matching = app.buttons.matching(identifier: "launcher.tile")
+            .matching(NSPredicate(format: "label == %@", "Fixture 0"))
+        XCTAssertGreaterThanOrEqual(matching.count, 2, app.debugDescription)
+        let label = matching.element(boundBy: 1)
+        XCTAssertTrue(label.waitForExistence(timeout: 8))
+        clickCenter(of: label, in: app.windows.firstMatch)
+        XCTAssertTrue(app.sheets.firstMatch.waitForExistence(timeout: 5), app.debugDescription)
+    }
+
+    @MainActor
+    func testClickingGapBetweenSearchResultsClosesLauncher() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "--show-launcher-for-ui-testing", "--ui-testing-isolated-data",
+            "--ui-testing-fixtures", "--ui-testing-window-mode",
+        ]
+        app.launch()
+        app.activate()
+
+        let root = app.descendants(matching: .any).matching(identifier: "launcher.root").firstMatch
+        XCTAssertTrue(root.waitForExistence(timeout: 8))
+        let search = app.textFields.firstMatch
+        search.click()
+        search.typeText("Fixture")
+        let first = app.buttons["Fixture 0"].firstMatch
+        let second = app.buttons["Fixture 1"].firstMatch
+        XCTAssertTrue(first.waitForExistence(timeout: 5))
+        XCTAssertTrue(second.waitForExistence(timeout: 5))
+        clickGap(between: first, and: second, in: app.windows.firstMatch)
+        assertLauncherDismissedWithoutFailedLaunch(app, root: root)
+    }
+
+    @MainActor
+    func testClickingSearchResultRunsItsActionInsteadOfBackgroundDismissal() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "--show-launcher-for-ui-testing", "--ui-testing-isolated-data",
+            "--ui-testing-fixtures", "--ui-testing-window-mode",
+        ]
+        app.launch()
+        app.activate()
+
+        let search = app.textFields.firstMatch
+        XCTAssertTrue(search.waitForExistence(timeout: 8))
+        search.click()
+        search.typeText("Fixture")
+        let result = app.buttons["Fixture 0"].firstMatch
+        XCTAssertTrue(result.waitForExistence(timeout: 5))
+        result.click()
+        XCTAssertTrue(app.sheets.firstMatch.waitForExistence(timeout: 5), app.debugDescription)
+    }
+
+    @MainActor
+    private func clickGap(between first: XCUIElement, and second: XCUIElement, in window: XCUIElement) {
+        let firstFrame = first.frame
+        let secondFrame = second.frame
+        XCTAssertGreaterThan(secondFrame.minX, firstFrame.maxX + 1)
+        let verticalOverlap = min(firstFrame.maxY, secondFrame.maxY) - max(firstFrame.minY, secondFrame.minY)
+        XCTAssertGreaterThan(verticalOverlap, 0, "Icons should share a row: \(firstFrame), \(secondFrame)")
+        let point = CGPoint(x: firstFrame.maxX + 1, y: firstFrame.midY)
+        click(point, in: window)
+    }
+
+    @MainActor
+    private func clickCenter(of element: XCUIElement, in window: XCUIElement) {
+        click(CGPoint(x: element.frame.midX, y: element.frame.midY), in: window)
+    }
+
+    @MainActor
+    private func click(_ point: CGPoint, in window: XCUIElement) {
+        let windowFrame = window.frame
+        window.coordinate(withNormalizedOffset: CGVector(
+            dx: (point.x - windowFrame.minX) / windowFrame.width,
+            dy: (point.y - windowFrame.minY) / windowFrame.height
+        )).click()
+    }
+
+    @MainActor
+    private func assertLauncherDismissedWithoutFailedLaunch(_ app: XCUIApplication, root: XCUIElement) {
+        XCTAssertTrue(waitForHittable(root, expected: false), app.debugDescription)
+        let noFailedLaunch = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"),
+            object: app.sheets.firstMatch
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [noFailedLaunch], timeout: 1.5), .completed, app.debugDescription)
+    }
+
+    @MainActor
+    func testFolderRemainsVisibleWhenSwitchingWindowToFullScreen() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "--show-launcher-for-ui-testing", "--ui-testing-isolated-data",
+            "--ui-testing-fixtures", "--ui-testing-existing-folder",
+            "--ui-testing-window-mode", "--ui-testing-switch-to-fullscreen",
+        ]
+        app.launch()
+        app.activate()
+        let folder = app.buttons["Fixture Folder"].firstMatch
+        XCTAssertTrue(folder.waitForExistence(timeout: 8))
+        Thread.sleep(forTimeInterval: 1.8)
+        let fullScreenHierarchy = app.debugDescription
+        XCTAssertTrue(fullScreenHierarchy.contains("Dialog (Main)"))
+        XCTAssertTrue(fullScreenHierarchy.contains("Fixture Folder"))
+    }
+
+    @MainActor
+    private func startEditing(in app: XCUIApplication) {
+        app.typeKey("e", modifierFlags: [.command, .shift])
+        let root = app.descendants(matching: .any).matching(identifier: "launcher.root").firstMatch
+        let enteredEditing = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == %@", "editing"),
+            object: root
+        )
+        if XCTWaiter.wait(for: [enteredEditing], timeout: 1) == .completed {
+            app.activate()
+            return
+        }
+
+        let appMenu = app.menuBars.menuBarItems["LaunchpadX"]
+        XCTAssertTrue(appMenu.waitForExistence(timeout: 3), app.debugDescription)
+        appMenu.click()
+        appMenu.menus.firstMatch.menuItems["编辑布局"].click()
+        app.activate()
+    }
+
     override func setUpWithError() throws {
         // Put setup code here. This method is called before the invocation of each test method in the class.
 
@@ -24,12 +285,13 @@ final class LaunchpadXUITests: XCTestCase {
     }
 
     @MainActor
-    func testLongPressEntersEditingAndBackgroundTapExits() throws {
+    func testEscapeExitsEditingWithoutTopRightButtons() throws {
         let app = XCUIApplication()
         app.launchArguments = [
             "--show-launcher-for-ui-testing",
             "--ui-testing-isolated-data",
             "--ui-testing-fixtures",
+            "--ui-testing-window-mode",
         ]
         app.launch()
         app.activate()
@@ -38,39 +300,13 @@ final class LaunchpadXUITests: XCTestCase {
             .matching(identifier: "launcher.root")
             .firstMatch
         XCTAssertTrue(root.waitForExistence(timeout: 8))
-        let launcherPanel = app.dialogs.firstMatch
-        XCTAssertTrue(launcherPanel.exists)
-        let visibleTile = app.buttons["Fixture 0"].firstMatch
-        XCTAssertTrue(visibleTile.waitForExistence(timeout: 8))
-
-        visibleTile.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-            .press(forDuration: 1.25)
+        startEditing(in: app)
+        XCTAssertFalse(app.buttons["编辑布局"].exists)
+        XCTAssertFalse(app.buttons["选择应用"].exists)
+        XCTAssertFalse(app.buttons["完成编辑"].exists)
         XCTAssertEqual(root.value as? String, "editing")
-
-        let adjacentTile = app.buttons["Fixture 1"].firstMatch
-        XCTAssertTrue(adjacentTile.exists)
-        let panelFrame = launcherPanel.frame
-        let blankPointBetweenTiles = launcherPanel.coordinate(
-            withNormalizedOffset: CGVector(
-                dx: (
-                    (visibleTile.frame.maxX + adjacentTile.frame.minX) / 2
-                        - panelFrame.minX
-                ) / panelFrame.width,
-                dy: (visibleTile.frame.midY - panelFrame.minY) / panelFrame.height
-            )
-        )
-        blankPointBetweenTiles.tap()
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
         XCTAssertEqual(root.value as? String, "normal")
-        XCTAssertEqual(visibleTile.value as? String, "normal")
-        Thread.sleep(forTimeInterval: 0.50)
-        let stoppedFrame = visibleTile.frame
-        Thread.sleep(forTimeInterval: 0.35)
-        XCTAssertEqual(visibleTile.value as? String, "normal")
-        let stableFrame = visibleTile.frame
-        XCTAssertEqual(stoppedFrame.midX, stableFrame.midX, accuracy: 0.1)
-        XCTAssertEqual(stoppedFrame.midY, stableFrame.midY, accuracy: 0.1)
-        XCTAssertEqual(stoppedFrame.width, stableFrame.width, accuracy: 0.1)
-        XCTAssertEqual(stoppedFrame.height, stableFrame.height, accuracy: 0.1)
     }
 
     @MainActor
@@ -89,6 +325,7 @@ final class LaunchpadXUITests: XCTestCase {
             .matching(identifier: "launcher.root")
             .firstMatch
         XCTAssertTrue(root.waitForExistence(timeout: 8))
+        startEditing(in: app)
         let launcherPanel = app.dialogs.firstMatch
         let editSource = app.buttons["Fixture 0"].firstMatch
         let folder = app.buttons["Fixture Folder"].firstMatch
@@ -105,8 +342,6 @@ final class LaunchpadXUITests: XCTestCase {
             )
         )
 
-        editSource.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-            .press(forDuration: 1.25)
         XCTAssertEqual(root.value as? String, "editing")
 
         folderCoordinate.click()
@@ -141,12 +376,12 @@ final class LaunchpadXUITests: XCTestCase {
             "--ui-testing-many-fixtures",
         ]
         app.launch()
-        app.activate()
 
         let root = app.descendants(matching: .any)
             .matching(identifier: "launcher.root")
             .firstMatch
         XCTAssertTrue(root.waitForExistence(timeout: 8))
+        startEditing(in: app)
         let launcherFrame = NSScreen.main?.frame ?? app.dialogs.firstMatch.frame
         let source = app.buttons["Fixture 0"].firstMatch
         XCTAssertTrue(source.waitForExistence(timeout: 8))
@@ -165,7 +400,7 @@ final class LaunchpadXUITests: XCTestCase {
         )
 
         sourceCenter.press(
-                forDuration: 1.25,
+                forDuration: 0.35,
                 thenDragTo: rightEdge,
                 withVelocity: .slow,
                 thenHoldForDuration: 1.0
@@ -188,12 +423,12 @@ final class LaunchpadXUITests: XCTestCase {
             "--ui-testing-many-fixtures",
         ]
         app.launch()
-        app.activate()
 
         let root = app.descendants(matching: .any)
             .matching(identifier: "launcher.root")
             .firstMatch
         XCTAssertTrue(root.waitForExistence(timeout: 8))
+        startEditing(in: app)
         app.typeKey(.rightArrow, modifierFlags: [])
         let launcherFrame = NSScreen.main?.frame ?? app.dialogs.firstMatch.frame
         let source = app.buttons["Fixture 35"].firstMatch
@@ -213,7 +448,7 @@ final class LaunchpadXUITests: XCTestCase {
         )
 
         sourceCenter.press(
-                forDuration: 1.25,
+                forDuration: 0.35,
                 thenDragTo: leftEdge,
                 withVelocity: .slow,
                 thenHoldForDuration: 1.0
@@ -236,12 +471,12 @@ final class LaunchpadXUITests: XCTestCase {
             "--ui-testing-many-fixtures",
         ]
         app.launch()
-        app.activate()
 
         let root = app.descendants(matching: .any)
             .matching(identifier: "launcher.root")
             .firstMatch
         XCTAssertTrue(root.waitForExistence(timeout: 8))
+        startEditing(in: app)
         let launcherPanel = app.dialogs.firstMatch
         XCTAssertTrue(launcherPanel.exists)
 
@@ -261,7 +496,7 @@ final class LaunchpadXUITests: XCTestCase {
 
         source.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
             .press(
-                forDuration: 1.25,
+                forDuration: 0.35,
                 thenDragTo: targetOriginalCoordinate,
                 withVelocity: .slow,
                 thenHoldForDuration: 0.2
@@ -296,42 +531,37 @@ final class LaunchpadXUITests: XCTestCase {
             "--ui-testing-isolated-data",
             "--ui-testing-fixtures",
             "--ui-testing-existing-folder",
+            "--ui-testing-window-mode",
         ]
         app.launch()
-        app.activate()
 
         let root = app.descendants(matching: .any)
             .matching(identifier: "launcher.root")
             .firstMatch
         XCTAssertTrue(root.waitForExistence(timeout: 8))
-        let launcherPanel = app.dialogs.firstMatch
-        let source = app.buttons["Fixture 7"].firstMatch
-        let folder = app.buttons["Fixture Folder"].firstMatch
-        let leftNeighbor = app.buttons["Fixture 0"].firstMatch
-        let rightNeighbor = app.buttons["Fixture 3"].firstMatch
+        startEditing(in: app)
+        let launcherPanel = app.windows.firstMatch
+        let source = app.buttons.matching(identifier: "launcher.tile")
+            .matching(NSPredicate(format: "label == %@", "Fixture 7")).element(boundBy: 0)
+        let folder = app.buttons.matching(identifier: "launcher.tile")
+            .matching(NSPredicate(format: "label == %@", "Fixture Folder")).element(boundBy: 0)
         XCTAssertTrue(source.waitForExistence(timeout: 8))
         XCTAssertTrue(folder.exists)
-        XCTAssertTrue(leftNeighbor.exists)
-        XCTAssertTrue(rightNeighbor.exists)
         let panelFrame = launcherPanel.frame
         let folderIconCoordinate = launcherPanel.coordinate(
             withNormalizedOffset: CGVector(
-                dx: ((leftNeighbor.frame.midX + rightNeighbor.frame.midX) / 2 - panelFrame.minX)
-                    / panelFrame.width,
-                dy: (leftNeighbor.frame.midY - panelFrame.minY) / panelFrame.height
+                dx: (folder.frame.midX - panelFrame.minX) / panelFrame.width,
+                dy: (folder.frame.midY - panelFrame.minY) / panelFrame.height
             )
         )
 
-        source.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-            .press(forDuration: 1.25)
         XCTAssertEqual(root.value as? String, "editing")
-        source.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-            .press(
-                forDuration: 0.35,
-                thenDragTo: folderIconCoordinate,
-                withVelocity: .slow,
-                thenHoldForDuration: 0.7
-            )
+        source.press(
+            forDuration: 0.35,
+            thenDragTo: folder,
+            withVelocity: .slow,
+            thenHoldForDuration: 0.7
+        )
 
         let removedFromRoot = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "exists == false"),
@@ -364,12 +594,12 @@ final class LaunchpadXUITests: XCTestCase {
             "--ui-testing-existing-folder",
         ]
         app.launch()
-        app.activate()
 
         let root = app.descendants(matching: .any)
             .matching(identifier: "launcher.root")
             .firstMatch
         XCTAssertTrue(root.waitForExistence(timeout: 8))
+        startEditing(in: app)
         let launcherPanel = app.dialogs.firstMatch
         let editSource = app.buttons["Fixture 0"].firstMatch
         let leftNeighbor = editSource
@@ -385,8 +615,6 @@ final class LaunchpadXUITests: XCTestCase {
             )
         )
 
-        editSource.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-            .press(forDuration: 1.25)
         XCTAssertEqual(root.value as? String, "editing")
         folderCoordinate.click()
 
@@ -420,12 +648,12 @@ final class LaunchpadXUITests: XCTestCase {
             "--ui-testing-existing-folder",
         ]
         app.launch()
-        app.activate()
 
         let root = app.descendants(matching: .any)
             .matching(identifier: "launcher.root")
             .firstMatch
         XCTAssertTrue(root.waitForExistence(timeout: 8))
+        startEditing(in: app)
         let launcherPanel = app.dialogs.firstMatch
         let editSource = app.buttons["Fixture 0"].firstMatch
         let rightNeighbor = app.buttons["Fixture 3"].firstMatch
@@ -440,8 +668,6 @@ final class LaunchpadXUITests: XCTestCase {
             )
         )
 
-        editSource.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-            .press(forDuration: 1.25)
         XCTAssertEqual(root.value as? String, "editing")
         folderCoordinate.click()
 
@@ -474,6 +700,139 @@ final class LaunchpadXUITests: XCTestCase {
             object: nil
         )
         XCTAssertEqual(XCTWaiter.wait(for: [reordered], timeout: 3), .completed)
+    }
+
+    @MainActor
+    func testWindowModeShowsLauncherInStandardWindow() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "--show-launcher-for-ui-testing",
+            "--ui-testing-isolated-data",
+            "--ui-testing-fixtures",
+            "--ui-testing-many-fixtures",
+            "--ui-testing-window-mode",
+            "--ui-testing-scroll-grid",
+        ]
+        app.launch()
+        app.activate()
+
+        let root = app.descendants(matching: .any)
+            .matching(identifier: "launcher.root")
+            .firstMatch
+        XCTAssertTrue(root.waitForExistence(timeout: 8))
+        XCTAssertFalse(app.buttons["编辑布局"].exists)
+        XCTAssertFalse(app.buttons["选择应用"].exists)
+        XCTAssertTrue(app.buttons["Fixture 0"].exists)
+        let search = app.textFields.firstMatch
+        let grid = app.scrollViews.firstMatch
+        XCTAssertTrue(search.exists)
+        XCTAssertTrue(grid.exists)
+        XCTAssertGreaterThan(grid.frame.width, 700)
+        XCTAssertLessThan(grid.frame.width, 1_200)
+        XCTAssertLessThan(search.frame.maxY, grid.frame.minY)
+        XCTAssertGreaterThanOrEqual(app.buttons["Fixture 0"].firstMatch.frame.minY, grid.frame.minY)
+    }
+
+    @MainActor
+    func testFullScreenHasNoTopRightButtons() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--show-launcher-for-ui-testing", "--ui-testing-isolated-data", "--ui-testing-fixtures"]
+        app.launch()
+        let root = app.descendants(matching: .any).matching(identifier: "launcher.root").firstMatch
+        XCTAssertTrue(root.waitForExistence(timeout: 8))
+        XCTAssertFalse(app.buttons["编辑布局"].exists)
+        XCTAssertFalse(app.buttons["选择应用"].exists)
+        XCTAssertFalse(app.buttons["完成编辑"].exists)
+    }
+
+    @MainActor
+    func testBatchActionsAppearOnlyWhileSelecting() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "--show-launcher-for-ui-testing", "--ui-testing-isolated-data",
+            "--ui-testing-fixtures", "--ui-testing-selecting-mode", "--ui-testing-window-mode",
+        ]
+        app.launch()
+        let done = app.buttons["完成"].firstMatch
+        XCTAssertTrue(done.waitForExistence(timeout: 8))
+        XCTAssertTrue(app.staticTexts["已选择 0 个应用"].exists)
+        XCTAssertTrue(app.buttons["全选"].exists)
+        XCTAssertTrue(app.buttons["隐藏"].exists)
+        XCTAssertTrue(app.buttons["移到废纸篓"].exists)
+        done.tap()
+        let controlsGone = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"),
+            object: app.buttons["全选"].firstMatch
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [controlsGone], timeout: 3), .completed)
+        XCTAssertFalse(app.buttons["编辑布局"].exists)
+        XCTAssertFalse(app.buttons["选择应用"].exists)
+    }
+
+    @MainActor
+    func testOptionHeldShowsUninstallButton() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "--show-launcher-for-ui-testing",
+            "--ui-testing-isolated-data",
+            "--ui-testing-fixtures",
+            "--ui-testing-window-mode",
+            "--ui-testing-option-held",
+        ]
+        app.launch()
+        XCTAssertTrue(app.buttons["Fixture 0"].waitForExistence(timeout: 8))
+
+        let uninstallButton = app.buttons.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "uninstall.")
+        ).firstMatch
+        XCTAssertTrue(uninstallButton.waitForExistence(timeout: 3))
+    }
+
+    @MainActor
+    func testOptionUninstallRequiresConfirmationAndCanBeCancelled() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "--show-launcher-for-ui-testing",
+            "--ui-testing-isolated-data",
+            "--ui-testing-fixtures",
+            "--ui-testing-window-mode",
+            "--ui-testing-option-held",
+        ]
+        app.launch()
+        app.activate()
+
+        let uninstallButton = app.buttons.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "uninstall.")
+        ).firstMatch
+        XCTAssertTrue(uninstallButton.waitForExistence(timeout: 8))
+        uninstallButton.click()
+        let cancelButton = app.buttons["trash.cancel"]
+        XCTAssertTrue(cancelButton.waitForExistence(timeout: 5), app.debugDescription)
+        cancelButton.tap()
+        XCTAssertTrue(uninstallButton.waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["Fixture 0"].exists)
+    }
+
+    @MainActor
+    func testOptionHeldShowsUninstallButtonInsideFolderInWindowMode() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "--show-launcher-for-ui-testing",
+            "--ui-testing-isolated-data",
+            "--ui-testing-fixtures",
+            "--ui-testing-existing-folder",
+            "--ui-testing-window-mode",
+            "--ui-testing-option-held",
+        ]
+        app.launch()
+
+        let folder = app.buttons["Fixture Folder"].firstMatch
+        XCTAssertTrue(folder.waitForExistence(timeout: 8))
+        folder.tap()
+        let uninstallButton = app.buttons.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "folder.uninstall.")
+        ).firstMatch
+        XCTAssertTrue(uninstallButton.waitForExistence(timeout: 3))
     }
 
     @MainActor

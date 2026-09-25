@@ -13,7 +13,9 @@ final class LayoutRepository {
     /// Restore the last successful scan without touching application bundles on disk.
     /// The subsequent scan remains authoritative for installs, removals and renames.
     func cachedApplications() throws -> [InstalledApplication] {
-        try fetchApplications().filter { $0.missingSince == nil }.map {
+        let cached = try fetchApplications().filter {
+            $0.missingSince == nil && FileManager.default.fileExists(atPath: $0.lastKnownPath)
+        }.map {
             InstalledApplication(
                 bundleIdentifier: $0.bundleIdentifier,
                 displayName: $0.displayName,
@@ -21,6 +23,80 @@ final class LayoutRepository {
                 isSystemApplication: $0.lastKnownPath.hasPrefix("/System/")
             )
         }
+        return ApplicationDiscoveryService.deduplicated(cached, currentApplicationURL: Bundle.main.bundleURL)
+    }
+
+    @discardableResult
+    func removeObsoleteLaunchpadXBackupRecords() throws -> Int {
+        let records = try fetchApplications().filter { record in
+            guard record.bundleIdentifier?.lowercased() == "com.launchpadx.launchpadx" else { return false }
+            let path = record.lastKnownPath.lowercased()
+            guard path.hasPrefix("/applications/launchpadx.") && path != "/applications/launchpadx.app" else { return false }
+            return !FileManager.default.fileExists(atPath: record.lastKnownPath)
+        }
+        for record in records { try deleteApplication(recordID: record.id) }
+        return records.count
+    }
+
+    func hasAnySavedData() throws -> Bool {
+        let hasApplications = !(try fetchApplications()).isEmpty
+        if hasApplications { return true }
+        return !(try fetchLayout()).isEmpty
+    }
+
+    @discardableResult
+    func importInitialLayout(_ entries: [ImportedLaunchOSEntry]) throws -> Int {
+        guard try hasAnySavedData() == false else { return 0 }
+        var recordIDsByPath: [String: UUID] = [:]
+        var importedPaths = Set<String>()
+        var rootOrder = 0
+
+        func recordID(for imported: ImportedLaunchOSApplication) -> UUID? {
+            let key = imported.application.normalizedPath
+            guard importedPaths.insert(key).inserted else { return nil }
+            let record = ApplicationRecord(
+                bundleIdentifier: imported.application.bundleIdentifier,
+                lastKnownPath: imported.application.bundleURL.path,
+                displayName: imported.application.displayName,
+                alias: imported.alias,
+                isHidden: imported.isHidden,
+                lastSeenAt: .now
+            )
+            context.insert(record)
+            recordIDsByPath[key] = record.id
+            return record.id
+        }
+
+        for entry in entries {
+            let applications = entry.applications.compactMap { imported -> (ImportedLaunchOSApplication, UUID)? in
+                recordID(for: imported).map { (imported, $0) }
+            }
+            guard !applications.isEmpty else { continue }
+            if let folderName = entry.folderName, applications.count > 1 {
+                let folder = LayoutItemRecord(kind: .folder, sortOrder: rootOrder, folderName: folderName)
+                context.insert(folder)
+                rootOrder += 1
+                for (childOrder, pair) in applications.enumerated() {
+                    context.insert(LayoutItemRecord(
+                        kind: .application,
+                        applicationRecordID: pair.1,
+                        parentFolderID: folder.id,
+                        sortOrder: childOrder
+                    ))
+                }
+            } else {
+                for pair in applications {
+                    context.insert(LayoutItemRecord(
+                        kind: .application,
+                        applicationRecordID: pair.1,
+                        sortOrder: rootOrder
+                    ))
+                    rootOrder += 1
+                }
+            }
+        }
+        try context.save()
+        return recordIDsByPath.count
     }
 
     func reconcile(discovered applications: [InstalledApplication], now: Date = .now) throws {
@@ -104,14 +180,17 @@ final class LayoutRepository {
                     application: app,
                     folderName: nil,
                     childApplicationRecordIDs: [],
-                    layoutIndex: item.sortOrder
+                    layoutIndex: item.sortOrder,
+                    customName: record.alias
                 )
             case .folder:
                 let children = layout
                     .filter { $0.parentFolderID == item.id }
                     .sorted { $0.sortOrder < $1.sortOrder }
                     .compactMap(\.applicationRecordID)
-                    .filter { applications[$0] != nil }
+                    .filter { id in
+                        applications[id] != nil && records.first(where: { $0.id == id })?.isHidden == false
+                    }
                 guard !children.isEmpty else { return nil }
                 return LauncherEntry(
                     id: item.id,
@@ -125,7 +204,15 @@ final class LayoutRepository {
             }
         }
         let hidden = Set(records.filter(\.isHidden).map(\.id))
-        return LauncherSnapshot(entries: entries, applications: applications, hiddenRecordIDs: hidden)
+        let aliases = Dictionary(uniqueKeysWithValues: records.compactMap { record in
+            record.alias.nilIfEmpty.map { (record.id, $0) }
+        })
+        return LauncherSnapshot(
+            entries: entries,
+            applications: applications,
+            hiddenRecordIDs: hidden,
+            applicationAliases: aliases
+        )
     }
 
     func visibleRecords(discoveredApplications applications: [InstalledApplication]) throws -> [(ApplicationRecord, InstalledApplication)] {
@@ -154,6 +241,39 @@ final class LayoutRepository {
     func setAlias(_ alias: String?, recordID: UUID) throws {
         guard let record = try fetchApplications().first(where: { $0.id == recordID }) else { return }
         record.alias = alias?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        try context.save()
+    }
+
+    func deleteApplication(recordID: UUID) throws {
+        let layout = try fetchLayout()
+        let records = try fetchApplications()
+        guard let record = records.first(where: { $0.id == recordID }) else { return }
+        var root = layout.filter { $0.parentFolderID == nil }
+        if let child = layout.first(where: { $0.applicationRecordID == recordID }),
+           let folderID = child.parentFolderID,
+           let folder = layout.first(where: { $0.id == folderID }) {
+            let siblings = layout.filter { $0.parentFolderID == folderID && $0.id != child.id }
+                .sorted { $0.sortOrder < $1.sortOrder }
+            context.delete(child)
+            if siblings.count < 2 {
+                context.delete(folder)
+                root.removeAll { $0.id == folderID }
+                if let sibling = siblings.first {
+                    sibling.parentFolderID = nil
+                    sibling.sortOrder = folder.sortOrder
+                    root.append(sibling)
+                }
+            } else {
+                normalize(siblings)
+            }
+        } else {
+            if let item = layout.first(where: { $0.applicationRecordID == recordID }) {
+                context.delete(item)
+                root.removeAll { $0.id == item.id }
+            }
+        }
+        context.delete(record)
+        normalize(root.sorted { $0.sortOrder < $1.sortOrder })
         try context.save()
     }
 

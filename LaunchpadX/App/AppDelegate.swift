@@ -31,8 +31,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         environment.start()
         if ProcessInfo.processInfo.arguments.contains("--show-launcher-for-ui-testing") {
             DispatchQueue.main.async { [weak self] in
-                self?.environment.launcherWindowController.show()
+                guard let self else { return }
+                self.environment.launcherWindowController.show()
+                if ProcessInfo.processInfo.arguments.contains("--ui-testing-switch-to-fullscreen") {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+                        self?.environment.settings.presentationMode = .fullScreen
+                    }
+                }
+                if ProcessInfo.processInfo.arguments.contains("--ui-testing-selecting-mode") {
+                    self.environment.launcherViewModel.toggleMultiSelecting()
+                }
             }
+        }
+        if ProcessInfo.processInfo.arguments.contains("--show-settings-for-ui-testing") {
+            DispatchQueue.main.async { [weak self] in self?.environment.showSettings() }
         }
     }
 
@@ -66,6 +78,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let menu = NSMenu()
         menu.addItem(withTitle: String(localized: "Open LaunchpadX"), action: #selector(openLauncher), keyEquivalent: "")
+        menu.addItem(withTitle: "编辑布局", action: #selector(editLayout), keyEquivalent: "")
+        menu.addItem(withTitle: "选择应用", action: #selector(selectApplications), keyEquivalent: "")
         menu.addItem(withTitle: String(localized: "Settings"), action: #selector(openSettings), keyEquivalent: ",")
         menu.addItem(NSMenuItem.separator())
         menu.addItem(withTitle: String(localized: "Rescan Applications"), action: #selector(rescan), keyEquivalent: "r")
@@ -73,7 +87,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(withTitle: String(localized: "Quit LaunchpadX"), action: #selector(quit), keyEquivalent: "q")
         menu.items.forEach { $0.target = self }
         item.menu = menu
+        item.isVisible = environment.settings.showMenuBarIcon
         statusItem = item
+        environment.settings.onMenuBarVisibilityChanged = { [weak self] visible in
+            self?.statusItem?.isVisible = visible
+        }
     }
 
     static func makeStatusItemImage(from sourceImage: NSImage) -> NSImage {
@@ -84,6 +102,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func openLauncher() { environment.launcherWindowController.show() }
+    @objc func editLayout() {
+        let viewModel = environment.launcherViewModel
+        if viewModel.isMultiSelecting { viewModel.toggleMultiSelecting() }
+        environment.launcherWindowController.show()
+        viewModel.beginEditing()
+    }
+    @objc func selectApplications() {
+        let viewModel = environment.launcherViewModel
+        if viewModel.isEditing { viewModel.endEditing() }
+        environment.launcherWindowController.show()
+        if !viewModel.isMultiSelecting { viewModel.toggleMultiSelecting() }
+    }
     @objc private func openSettings() { environment.showSettings() }
     @objc private func rescan() { Task { await environment.launcherViewModel.rescan() } }
     @objc private func quit() { NSApp.terminate(nil) }

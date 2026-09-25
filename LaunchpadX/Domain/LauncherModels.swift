@@ -29,6 +29,8 @@ struct InstalledApplication: Identifiable, Sendable, Hashable {
     nonisolated var normalizedPath: String {
         bundleURL.standardizedFileURL.path.lowercased()
     }
+
+    nonisolated var canMoveToTrash: Bool { !isSystemApplication }
 }
 
 enum LauncherEntryKind: String, Codable, Sendable {
@@ -44,11 +46,12 @@ struct LauncherEntry: Identifiable, Hashable, Sendable {
     var folderName: String?
     var childApplicationRecordIDs: [UUID]
     var layoutIndex: Int = 0
+    var customName: String? = nil
 
     var title: String {
         switch kind {
         case .application:
-            application?.displayName ?? "Missing Application"
+            customName?.nilIfEmpty ?? application?.displayName ?? "Missing Application"
         case .folder:
             folderName?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? "Folder"
         }
@@ -59,6 +62,7 @@ struct LauncherSnapshot: Sendable {
     var entries: [LauncherEntry]
     var applications: [UUID: InstalledApplication]
     var hiddenRecordIDs: Set<UUID>
+    var applicationAliases: [UUID: String] = [:]
 }
 
 enum SearchSortOrder: String, CaseIterable, Codable, Identifiable {
@@ -70,9 +74,9 @@ enum SearchSortOrder: String, CaseIterable, Codable, Identifiable {
 
     var localizedTitle: String {
         switch self {
-        case .relevance: String(localized: "Search sort relevance")
-        case .recent: String(localized: "Search sort recent")
-        case .name: String(localized: "Search sort name")
+        case .relevance: "相关度"
+        case .recent: "最近使用"
+        case .name: "名称"
         }
     }
 }
@@ -87,26 +91,55 @@ enum DisplayStrategy: String, CaseIterable, Codable, Identifiable {
 
     var localizedTitle: String {
         switch self {
-        case .cursor: String(localized: "Display cursor")
-        case .primary: String(localized: "Display primary")
-        case .lastUsed: String(localized: "Display last used")
-        case .fixed: String(localized: "Display fixed")
+        case .cursor: "鼠标所在显示器"
+        case .primary: "主显示器"
+        case .lastUsed: "上次使用的显示器"
+        case .fixed: "指定显示器"
         }
     }
 }
 
-enum LauncherBackgroundKind: String, CaseIterable, Codable, Identifiable {
-    case brandGradient
-    case wallpaper
-    case customImage
+enum LauncherPresentationMode: String, CaseIterable, Codable, Identifiable {
+    case fullScreen
+    case window
 
     var id: String { rawValue }
-
     var localizedTitle: String {
         switch self {
-        case .brandGradient: String(localized: "Background brand gradient")
-        case .wallpaper: String(localized: "Background wallpaper")
-        case .customImage: String(localized: "Background custom image")
+        case .fullScreen: "全屏"
+        case .window: "窗口"
+        }
+    }
+}
+
+enum LauncherGridMode: String, CaseIterable, Codable, Identifiable {
+    case pages
+    case verticalScroll
+
+    var id: String { rawValue }
+    var localizedTitle: String {
+        switch self {
+        case .pages: "分页"
+        case .verticalScroll: "纵向滚动"
+        }
+    }
+}
+
+enum HotCornerLocation: String, CaseIterable, Codable, Identifiable {
+    case off
+    case topLeft
+    case topRight
+    case bottomLeft
+    case bottomRight
+
+    var id: String { rawValue }
+    var localizedTitle: String {
+        switch self {
+        case .off: "关闭"
+        case .topLeft: "左上角"
+        case .topRight: "右上角"
+        case .bottomLeft: "左下角"
+        case .bottomRight: "右下角"
         }
     }
 }
@@ -130,12 +163,48 @@ struct HotKey: Codable, Equatable, Sendable {
 
     private var keyName: String {
         switch keyCode {
-        case 49: "Space"
-        case 36: "Return"
+        case 49: "空格"
+        case 36: "回车"
         case 53: "Esc"
         case 123: "←"
         case 124: "→"
-        default: "Key \(keyCode)"
+        case 0: "A"
+        case 1: "S"
+        case 2: "D"
+        case 3: "F"
+        case 4: "H"
+        case 5: "G"
+        case 6: "Z"
+        case 7: "X"
+        case 8: "C"
+        case 9: "V"
+        case 11: "B"
+        case 12: "Q"
+        case 13: "W"
+        case 14: "E"
+        case 15: "R"
+        case 16: "Y"
+        case 17: "T"
+        case 18: "1"
+        case 19: "2"
+        case 20: "3"
+        case 21: "4"
+        case 22: "6"
+        case 23: "5"
+        case 25: "9"
+        case 26: "7"
+        case 28: "8"
+        case 29: "0"
+        case 31: "O"
+        case 32: "U"
+        case 34: "I"
+        case 35: "P"
+        case 37: "L"
+        case 38: "J"
+        case 40: "K"
+        case 45: "N"
+        case 46: "M"
+        default: "按键 \(keyCode)"
         }
     }
 

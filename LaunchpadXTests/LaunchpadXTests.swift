@@ -6,6 +6,7 @@
 //
 
 import AppKit
+import Carbon
 import CoreGraphics
 import Foundation
 import SwiftData
@@ -13,6 +14,86 @@ import Testing
 @testable import LaunchpadX
 
 struct LaunchpadXTests {
+    @MainActor
+    @Test func pointerRouterClosesOnlyOnStationaryBlankClick() {
+        let window = LauncherWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 100, height: 100),
+            styleMask: .borderless,
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = NSView(frame: NSRect(x: 0, y: 0, width: 100, height: 100))
+        let router = LauncherPointerRouter()
+        router.gridFrame = CGRect(x: 10, y: 10, width: 80, height: 80)
+        router.tileFrames = [CGRect(x: 20, y: 20, width: 10, height: 10)]
+        var dismissCount = 0
+        router.onBlankClick = { dismissCount += 1 }
+
+        func event(_ type: NSEvent.EventType, at point: CGPoint) -> NSEvent {
+            NSEvent.mouseEvent(
+                with: type,
+                location: NSPoint(x: point.x, y: 100 - point.y),
+                modifierFlags: [],
+                timestamp: 0,
+                windowNumber: window.windowNumber,
+                context: nil,
+                eventNumber: 1,
+                clickCount: 1,
+                pressure: 1
+            )!
+        }
+
+        #expect(router.consume(event(.leftMouseDown, at: CGPoint(x: 25, y: 25)), in: window) == false)
+        #expect(router.consume(event(.leftMouseDown, at: CGPoint(x: 40, y: 40)), in: window))
+        #expect(router.consume(event(.leftMouseUp, at: CGPoint(x: 40, y: 40)), in: window))
+        #expect(dismissCount == 1)
+        #expect(router.consume(event(.leftMouseDown, at: CGPoint(x: 40, y: 40)), in: window))
+        #expect(router.consume(event(.leftMouseDragged, at: CGPoint(x: 55, y: 55)), in: window))
+        #expect(router.consume(event(.leftMouseUp, at: CGPoint(x: 55, y: 55)), in: window))
+        #expect(dismissCount == 1)
+    }
+
+    @MainActor
+    @Test func applicationScanKeepsCurrentBundleAndResolvesDuplicatePaths() {
+        let currentURL = URL(fileURLWithPath: "/Applications/LaunchpadX.app")
+        let applications = [
+            InstalledApplication(bundleIdentifier: "com.LaunchpadX.LaunchpadX", displayName: "Old LaunchpadX", bundleURL: URL(fileURLWithPath: "/Applications/LaunchpadX.previous.app")),
+            InstalledApplication(bundleIdentifier: "com.LaunchpadX.LaunchpadX", displayName: "LaunchpadX", bundleURL: currentURL),
+            InstalledApplication(bundleIdentifier: "com.apple.Safari", displayName: "Safari", bundleURL: URL(fileURLWithPath: "/Applications/Safari.app")),
+            InstalledApplication(bundleIdentifier: "com.apple.Safari", displayName: "Safari", bundleURL: URL(fileURLWithPath: "/System/Cryptexes/App/System/Applications/Safari.app"))
+        ]
+
+        let unique = ApplicationDiscoveryService.deduplicated(applications, currentApplicationURL: currentURL)
+
+        #expect(unique.count == 2)
+        #expect(unique.first { $0.bundleIdentifier == "com.LaunchpadX.LaunchpadX" }?.bundleURL == currentURL)
+        #expect(unique.filter { $0.bundleIdentifier == "com.apple.Safari" }.count == 1)
+    }
+
+    @Test func narrowWindowReducesGridColumnsFor72PointIcons() {
+        #expect(LauncherView.responsiveColumnCount(availableWidth: 956, iconSize: 72, requested: 7) == 7)
+        #expect(LauncherView.responsiveColumnCount(availableWidth: 636, iconSize: 72, requested: 7) == 4)
+    }
+
+    @MainActor
+    @Test func obsoleteLaunchpadXRecordsAreRemovedWithoutTouchingCurrentApplication() throws {
+        let container = try ModelContainer(
+            for: ApplicationRecord.self, LayoutItemRecord.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+        )
+        let repository = LayoutRepository(container: container)
+        let applications = [
+            InstalledApplication(bundleIdentifier: "com.LaunchpadX.LaunchpadX", displayName: "LaunchpadX", bundleURL: URL(fileURLWithPath: "/Applications/LaunchpadX.app")),
+            InstalledApplication(bundleIdentifier: "com.LaunchpadX.LaunchpadX", displayName: "Old LaunchpadX", bundleURL: URL(fileURLWithPath: "/Applications/LaunchpadX.obsolete-test.app"))
+        ]
+        try repository.reconcile(discovered: applications)
+
+        #expect(try repository.removeObsoleteLaunchpadXBackupRecords() == 1)
+        let remaining = try repository.snapshot(discoveredApplications: applications)
+        #expect(remaining.entries.count == 1)
+        #expect(remaining.entries.first?.application?.bundleURL.path == "/Applications/LaunchpadX.app")
+    }
+
     @MainActor
     @Test func returningToOriginalCellRestoresPreviewBeforeReleaseAndAvoidsDuplicateImage() throws {
         let container = try ModelContainer(for: ApplicationRecord.self, LayoutItemRecord.self,
@@ -47,16 +128,116 @@ struct LaunchpadXTests {
     }
 
     @MainActor
+    @Test func droppingApplicationOnAnotherApplicationsIconCreatesFolderImmediately() throws {
+        let container = try ModelContainer(
+            for: ApplicationRecord.self, LayoutItemRecord.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+        )
+        let model = LauncherViewModel(
+            repository: LayoutRepository(container: container), settings: SettingsStore(),
+            discovery: ApplicationDiscoveryService(), launcher: ApplicationLauncherService(),
+            icons: IconProvider(), searchIndex: SearchIndex()
+        )
+        model.loadForUITesting((0..<3).map {
+            InstalledApplication(
+                bundleIdentifier: "folder-drop.\($0)", displayName: "Folder Drop \($0)",
+                bundleURL: URL(fileURLWithPath: "/Applications/FolderDrop\($0).app")
+            )
+        })
+        let entries = model.snapshot.entries
+        model.beginEditing()
+        model.beginDraggingFromPress(entries[0])
+
+        #expect(model.performDrop(on: entries[1], grouping: true))
+
+        let folder = try #require(model.snapshot.entries.first(where: { $0.kind == .folder }))
+        #expect(folder.childApplicationRecordIDs.count == 2)
+        #expect(Set(folder.childApplicationRecordIDs) == Set([
+            try #require(entries[0].applicationRecordID),
+            try #require(entries[1].applicationRecordID)
+        ]))
+        #expect(model.openedFolderID == folder.id)
+        #expect(model.renamingFolderID == folder.id)
+        #expect(!model.isEditing)
+    }
+
+    @MainActor
+    @Test func draggingIntoExistingFolderAndBackOutPreservesApplications() async throws {
+        let container = try ModelContainer(
+            for: ApplicationRecord.self, LayoutItemRecord.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+        )
+        let repository = LayoutRepository(container: container)
+        let model = LauncherViewModel(
+            repository: repository, settings: SettingsStore(),
+            discovery: ApplicationDiscoveryService(), launcher: ApplicationLauncherService(),
+            icons: IconProvider(), searchIndex: SearchIndex()
+        )
+        model.loadForUITesting((0..<3).map {
+            InstalledApplication(bundleIdentifier: "existing-folder.\($0)", displayName: "App \($0)",
+                                 bundleURL: URL(fileURLWithPath: "/Applications/ExistingFolder\($0).app"))
+        })
+        let initial = model.snapshot.entries
+        let folderID = try repository.createFolder(draggedEntryID: initial[1].id, targetEntryID: initial[0].id)
+        try model.reloadSnapshot()
+        let folder = try #require(model.snapshot.entries.first(where: { $0.id == folderID }))
+        let source = try #require(model.snapshot.entries.first(where: { $0.id == initial[2].id }))
+        let sourceRecordID = try #require(source.applicationRecordID)
+
+        model.beginEditing()
+        model.beginDraggingFromPress(source)
+        #expect(model.performDrop(on: folder))
+        #expect(model.snapshot.entries.allSatisfy { $0.id != source.id })
+        let updatedFolder = try #require(model.snapshot.entries.first(where: { $0.id == folderID }))
+        #expect(updatedFolder.childApplicationRecordIDs.contains(sourceRecordID))
+
+        model.open(updatedFolder)
+        _ = model.folderDragProvider(recordID: sourceRecordID)
+        try await Task.sleep(for: .milliseconds(20))
+        #expect(model.performFolderDropOutside())
+        #expect(model.snapshot.entries.contains(where: { $0.applicationRecordID == sourceRecordID }))
+        #expect(model.snapshot.entries.first(where: { $0.id == folderID })?.childApplicationRecordIDs.contains(sourceRecordID) == false)
+    }
+
+    @MainActor
+    @Test func verticalScrollModeDoesNotInterpretDismissOrPageGestures() throws {
+        let container = try ModelContainer(
+            for: ApplicationRecord.self, LayoutItemRecord.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+        )
+        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let settings = SettingsStore(defaults: defaults)
+        settings.gridMode = .verticalScroll
+        let model = LauncherViewModel(
+            repository: LayoutRepository(container: container), settings: settings,
+            discovery: ApplicationDiscoveryService(), launcher: ApplicationLauncherService(),
+            icons: IconProvider(), searchIndex: SearchIndex()
+        )
+        var dismissed = false
+        model.onDismiss = { dismissed = true }
+
+        #expect(!model.handleTrackpadGesture(.dismiss))
+        #expect(!model.handleTrackpadGesture(.previousPage))
+        #expect(!model.handleTrackpadGesture(.nextPage))
+        #expect(!dismissed)
+        #expect(model.selectedPage == 0)
+    }
+
+    @MainActor
     @Test func cachedStartupRestoresLayoutAndExcludesMissingApplications() throws {
         let container = try ModelContainer(
             for: ApplicationRecord.self, LayoutItemRecord.self,
             configurations: ModelConfiguration(isStoredInMemoryOnly: true)
         )
         let repository = LayoutRepository(container: container)
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("LaunchpadX-Cached-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
         let apps = (0..<3).map {
             InstalledApplication(bundleIdentifier: "fixture.\($0)", displayName: "应用\($0)",
-                                 bundleURL: URL(fileURLWithPath: "/Applications/Fixture\($0).app"))
+                                 bundleURL: root.appendingPathComponent("Fixture\($0).app", isDirectory: true))
         }
+        for app in apps { try FileManager.default.createDirectory(at: app.bundleURL, withIntermediateDirectories: true) }
         try repository.reconcile(discovered: apps)
         let before = try repository.snapshot(discoveredApplications: apps)
         let folderID = try repository.createFolder(draggedEntryID: before.entries[1].id, targetEntryID: before.entries[0].id)
@@ -173,13 +354,31 @@ struct LaunchpadXTests {
     @MainActor
     @Test func trackpadClassifierMapsPhysicalLeftSwipeToNextPage() {
         var classifier = TrackpadGestureClassifier()
-        #expect(classifier.consume(horizontal: 23, vertical: 0) == nil)
-        #expect(classifier.consume(horizontal: 24, vertical: 0) == .nextPage)
+        #expect(classifier.consume(horizontal: 12, vertical: 0) == nil)
+        #expect(classifier.consume(horizontal: 12, vertical: 0) == .nextPage)
         #expect(classifier.consume(horizontal: 200, vertical: 0) == nil)
         classifier.reset()
-        #expect(classifier.consume(horizontal: -47, vertical: 0) == .previousPage)
+        #expect(classifier.consume(horizontal: -24, vertical: 0) == .previousPage)
         classifier.reset()
-        #expect(classifier.consume(horizontal: 0, vertical: -47) == .dismiss)
+        #expect(classifier.consume(horizontal: 0, vertical: -24) == .dismiss)
+    }
+
+    @MainActor
+    @Test func trackpadClassifierResetsAfterCancelledGesture() {
+        var classifier = TrackpadGestureClassifier()
+        #expect(classifier.consume(horizontal: 18, vertical: 0) == nil)
+        classifier.reset()
+        #expect(classifier.consume(horizontal: 12, vertical: 0) == nil)
+        #expect(classifier.consume(horizontal: 12, vertical: 0) == .nextPage)
+    }
+
+    @MainActor
+    @Test func optionModifierStateReportsPressAndReleaseOnce() {
+        var state = OptionModifierState()
+        #expect(state.update(modifiers: [.option]) == true)
+        #expect(state.update(modifiers: [.option]) == nil)
+        #expect(state.update(modifiers: []) == false)
+        #expect(state.update(modifiers: []) == nil)
     }
 
     @MainActor
@@ -200,6 +399,42 @@ struct LaunchpadXTests {
         #expect(initial.reversePageDirection == false)
         initial.reversePageDirection = true
         #expect(SettingsStore(defaults: defaults).reversePageDirection == true)
+    }
+
+    @Test func systemApplicationsCannotBeMovedToTrash() {
+        let systemApplication = InstalledApplication(
+            bundleIdentifier: "com.apple.finder",
+            displayName: "Finder",
+            bundleURL: URL(fileURLWithPath: "/System/Applications/Finder.app"),
+            isSystemApplication: true
+        )
+        let userApplication = InstalledApplication(
+            bundleIdentifier: "com.example.app",
+            displayName: "Example",
+            bundleURL: URL(fileURLWithPath: "/Applications/Example.app")
+        )
+        #expect(!systemApplication.canMoveToTrash)
+        #expect(userApplication.canMoveToTrash)
+    }
+
+    @MainActor
+    @Test func optionUninstallModeTracksPressAndReleaseAndClearsWhenDismissed() throws {
+        let container = try ModelContainer(
+            for: ApplicationRecord.self, LayoutItemRecord.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+        )
+        let model = LauncherViewModel(
+            repository: LayoutRepository(container: container),
+            settings: SettingsStore(), discovery: ApplicationDiscoveryService(),
+            launcher: ApplicationLauncherService(), icons: IconProvider(), searchIndex: SearchIndex()
+        )
+        model.setOptionUninstallMode(true)
+        #expect(model.isOptionUninstallMode)
+        model.setOptionUninstallMode(false)
+        #expect(!model.isOptionUninstallMode)
+        model.setOptionUninstallMode(true)
+        model.cancelTransientEditing()
+        #expect(!model.isOptionUninstallMode)
     }
 
     @MainActor
@@ -463,10 +698,10 @@ struct LaunchpadXTests {
     @MainActor
     @Test func dropCenterGroupsWhileDropEdgeReorders() {
         let iconSize = 94.0
-        let center = CGPoint(x: (iconSize + 40) / 2, y: iconSize / 2)
+        let center = CGPoint(x: iconSize / 2, y: iconSize / 2)
 
-        #expect(LauncherEntryDropDelegate.isGroupingLocation(center, iconSize: iconSize))
-        #expect(!LauncherEntryDropDelegate.isGroupingLocation(CGPoint(x: 2, y: 2), iconSize: iconSize))
+        #expect(LauncherEntryDropDelegate.isGroupingLocation(center, iconSize: iconSize, tileWidth: iconSize))
+        #expect(!LauncherEntryDropDelegate.isGroupingLocation(CGPoint(x: 2, y: 2), iconSize: iconSize, tileWidth: iconSize))
     }
 
     @MainActor
@@ -740,6 +975,129 @@ struct LaunchpadXTests {
             pageCount: 3,
             delta: 1
         ) == 2)
+    }
+
+    @MainActor
+    @Test func importedLaunchOSLayoutPreservesNamesFoldersAndVisibilityAndIsIdempotent() throws {
+        let container = try ModelContainer(
+            for: ApplicationRecord.self, LayoutItemRecord.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+        )
+        let repository = LayoutRepository(container: container)
+        let apps = (0..<3).map { index in
+            InstalledApplication(
+                bundleIdentifier: "migration.\(index)", displayName: "Imported \(index)",
+                bundleURL: URL(fileURLWithPath: "/Applications/Imported \(index).app")
+            )
+        }
+        let imported = [
+            ImportedLaunchOSEntry(folderName: nil, applications: [
+                ImportedLaunchOSApplication(application: apps[0], alias: "Renamed", isHidden: false)
+            ]),
+            ImportedLaunchOSEntry(folderName: "Work", applications: [
+                ImportedLaunchOSApplication(application: apps[1], alias: nil, isHidden: false),
+                ImportedLaunchOSApplication(application: apps[2], alias: nil, isHidden: true)
+            ])
+        ]
+
+        #expect(try repository.importInitialLayout(imported) == 3)
+        #expect(try repository.importInitialLayout(imported) == 0)
+        let snapshot = try repository.snapshot(discoveredApplications: apps)
+        #expect(snapshot.entries.count == 2)
+        #expect(snapshot.entries[0].title == "Renamed")
+        #expect(snapshot.entries[1].title == "Work")
+        #expect(snapshot.entries[1].childApplicationRecordIDs.count == 1)
+        #expect(snapshot.hiddenRecordIDs.count == 1)
+    }
+
+    @Test func launchOSFileURLPathsMatchInstalledApplicationPaths() {
+        let installed = URL(fileURLWithPath: "/Applications/Design Tool.app")
+        #expect(LaunchOSLayoutImporter.normalizedPath(from: "file:///Applications/Design%20Tool.app") == installed.path.lowercased())
+        #expect(LaunchOSLayoutImporter.normalizedPath(from: installed.path) == installed.path.lowercased())
+    }
+
+    @MainActor
+    @Test func multiSelectSelectsVisibleAppsAndHidesSelectedRecords() throws {
+        let container = try ModelContainer(
+            for: ApplicationRecord.self, LayoutItemRecord.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+        )
+        let repository = LayoutRepository(container: container)
+        let apps = (0..<3).map {
+            InstalledApplication(bundleIdentifier: "batch.\($0)", displayName: "Batch \($0)",
+                                 bundleURL: URL(fileURLWithPath: "/Applications/Batch\($0).app"))
+        }
+        let model = LauncherViewModel(repository: repository, settings: SettingsStore(),
+                                      discovery: ApplicationDiscoveryService(), launcher: ApplicationLauncherService(),
+                                      icons: IconProvider(), searchIndex: SearchIndex())
+        model.loadForUITesting(apps)
+        model.hide(entry: model.snapshot.entries[0])
+        model.toggleMultiSelecting()
+        model.selectAllApplications()
+        #expect(model.selectedApplicationRecordIDs.count == 2)
+        model.hideSelectedApplications()
+        #expect(model.snapshot.entries.isEmpty)
+        #expect(model.snapshot.hiddenRecordIDs.count == 3)
+        #expect(!model.isMultiSelecting)
+    }
+
+    @MainActor
+    @Test func scanRootsPersistAndIncludeUserFolders() {
+        let suiteName = "LaunchpadXTests.scanRoots.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let root = URL(fileURLWithPath: "/tmp/LaunchpadX Extra Apps", isDirectory: true)
+        let settings = SettingsStore(defaults: defaults)
+        settings.additionalScanRoots = [root]
+        let restored = SettingsStore(defaults: defaults)
+        #expect(restored.additionalScanRoots.map(\.standardizedFileURL.path) == [root.standardizedFileURL.path])
+        #expect(restored.allScanRoots.contains { $0.standardizedFileURL.path == root.standardizedFileURL.path })
+    }
+
+    @MainActor
+    @Test func customLauncherHotKeyPersists() {
+        let suiteName = "LaunchpadXTests.customHotKey.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let settings = SettingsStore(defaults: defaults)
+        let custom = HotKey(keyCode: 40, carbonModifiers: UInt32(controlKey | optionKey))
+        settings.hotKey = custom
+        #expect(SettingsStore(defaults: defaults).hotKey == custom)
+        #expect(custom.displayString == "⌥⌃K")
+    }
+
+    @MainActor
+    @Test func menuBarVisibilityDefaultsToShownAndPersists() {
+        let suiteName = "LaunchpadXTests.menuBarVisibility.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let settings = SettingsStore(defaults: defaults)
+        #expect(settings.showMenuBarIcon)
+        var visibilityUpdates: [Bool] = []
+        settings.onMenuBarVisibilityChanged = { visibilityUpdates.append($0) }
+        settings.showMenuBarIcon = false
+        #expect(visibilityUpdates == [false])
+        #expect(!SettingsStore(defaults: defaults).showMenuBarIcon)
+        settings.showMenuBarIcon = true
+        #expect(visibilityUpdates == [false, true])
+    }
+
+    @MainActor
+    @Test func presentationAndGridModesPersist() {
+        let suiteName = "LaunchpadXTests.presentation.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let settings = SettingsStore(defaults: defaults)
+        #expect(settings.presentationMode == .fullScreen)
+        #expect(settings.gridMode == .pages)
+        settings.presentationMode = .window
+        settings.gridMode = .verticalScroll
+        let restored = SettingsStore(defaults: defaults)
+        #expect(restored.presentationMode == .window)
+        #expect(restored.gridMode == .verticalScroll)
+        #expect(restored.f4ShortcutEnabled == false)
+        #expect(restored.trackpadWakeEnabled == false)
+        #expect(restored.hotCorner == .off)
     }
 
     @MainActor

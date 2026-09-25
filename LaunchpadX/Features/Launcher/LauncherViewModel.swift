@@ -19,6 +19,9 @@ final class LauncherViewModel {
     var selectedSearchIndex = 0
     var selectedPage = 0
     var isEditing = false
+    var isMultiSelecting = false
+    private(set) var isOptionUninstallMode = false
+    var selectedApplicationRecordIDs: Set<UUID> = []
     var openedFolderID: UUID?
     var renamingFolderID: UUID?
     var errorMessage: String?
@@ -76,6 +79,7 @@ final class LauncherViewModel {
     var currentPageEntries: [LauncherEntry] {
         entries(forPage: selectedPage)
     }
+    var allRootEntries: [LauncherEntry] { displayedEntries.sorted { $0.layoutIndex < $1.layoutIndex } }
 
     func entries(forPage page: Int) -> [LauncherEntry] {
         let range = (page * settings.gridCapacity)..<((page + 1) * settings.gridCapacity)
@@ -119,18 +123,19 @@ final class LauncherViewModel {
             let roots = settings.allScanRoots
             let apps = await discovery.scan(roots: roots)
             guard !Task.isCancelled else { return }
-            guard !Self.hasSameDiscoveredApplications(apps, discoveredApplications) else { continue }
-            do {
-                try repository.reconcile(discovered: apps)
-                let nextSnapshot = try repository.snapshot(discoveredApplications: apps)
-                guard !Task.isCancelled else { return }
-                discoveredApplications = apps
-                applySnapshot(nextSnapshot)
-                scheduleIconPrewarming()
-            } catch {
-                presentError(error)
-            }
+            applyScanResults(apps)
         } while scanRequestedWhileRunning && !Task.isCancelled
+    }
+
+    func applyScanResults(_ applications: [InstalledApplication]) {
+        guard !Self.hasSameDiscoveredApplications(applications, discoveredApplications) else { return }
+        do {
+            try repository.reconcile(discovered: applications)
+            let nextSnapshot = try repository.snapshot(discoveredApplications: applications)
+            discoveredApplications = applications
+            applySnapshot(nextSnapshot)
+            scheduleIconPrewarming()
+        } catch { presentError(error) }
     }
 
 #if DEBUG
@@ -218,6 +223,7 @@ final class LauncherViewModel {
 
     func handleTrackpadGesture(_ gesture: TrackpadGesture) -> Bool {
         guard renamingFolderID == nil else { return false }
+        guard settings.gridMode == .pages else { return false }
         switch gesture {
         case .previousPage:
             guard searchQuery.isEmpty, openedFolderID == nil, !isEditing, selectedPage > 0 else { return false }
@@ -234,6 +240,25 @@ final class LauncherViewModel {
     }
 
     func handleKeyDown(_ event: NSEvent) -> Bool {
+        if event.keyCode == 53 {
+            handleEscapeKey()
+            return true
+        }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let shortcutModifiers = modifiers.intersection([.command, .shift, .option, .control])
+        if shortcutModifiers == [.command, .shift] {
+            switch event.keyCode {
+            case 14: // E
+                toggleEditing()
+                return true
+            case 0: // A
+                if isEditing { endEditing() }
+                if !isMultiSelecting { toggleMultiSelecting() }
+                return true
+            default:
+                break
+            }
+        }
         guard searchQuery.isEmpty, openedFolderID == nil, !isEditing else { return false }
         if settings.previousPageHotKey.matches(keyCode: event.keyCode, modifiers: event.modifierFlags) {
             return handleTrackpadGesture(.previousPage)
@@ -244,12 +269,25 @@ final class LauncherViewModel {
         return false
     }
 
+    func handleEscapeKey() {
+        if renamingFolderID != nil { renamingFolderID = nil }
+        else if openedFolderID != nil { closeFolder() }
+        else if !searchQuery.isEmpty { searchQuery = "" }
+        else if isMultiSelecting { toggleMultiSelecting() }
+        else if isEditing { endEditing() }
+        else { onDismiss?() }
+    }
+
     func open(_ entry: LauncherEntry) {
         if entry.kind == .folder {
             openedFolderID = entry.id
-        } else if !isEditing {
+        } else if !isEditing, !isOptionUninstallMode {
             launch(entry: entry)
         }
+    }
+
+    func setOptionUninstallMode(_ isPressed: Bool) {
+        isOptionUninstallMode = isPressed
     }
 
     func beginRenamingFolder(_ entry: LauncherEntry) {
@@ -283,6 +321,7 @@ final class LauncherViewModel {
 
     func cancelTransientEditing() {
         endEditing()
+        isOptionUninstallMode = false
         openedFolderID = nil
         searchQuery = ""
     }
@@ -291,6 +330,63 @@ final class LauncherViewModel {
         guard let recordID = entry.applicationRecordID else { return }
         do { try repository.setHidden(true, recordID: recordID); try reloadSnapshot() }
         catch { presentError(error) }
+    }
+
+    func toggleMultiSelecting() {
+        isMultiSelecting.toggle()
+        selectedApplicationRecordIDs.removeAll()
+    }
+
+    func toggleSelection(for entry: LauncherEntry) {
+        guard let recordID = entry.applicationRecordID else { return }
+        toggleSelection(for: recordID)
+    }
+
+    func toggleSelection(for recordID: UUID) {
+        guard snapshot.applications[recordID] != nil,
+              !snapshot.hiddenRecordIDs.contains(recordID) else { return }
+        if selectedApplicationRecordIDs.contains(recordID) { selectedApplicationRecordIDs.remove(recordID) }
+        else { selectedApplicationRecordIDs.insert(recordID) }
+    }
+
+    func selectAllApplications() {
+        selectedApplicationRecordIDs = Set(snapshot.applications.keys).subtracting(snapshot.hiddenRecordIDs)
+    }
+
+    func clearSelection() { selectedApplicationRecordIDs.removeAll() }
+
+    func renameApplication(recordID: UUID, to name: String) {
+        do { try repository.setAlias(name, recordID: recordID); try reloadSnapshot() }
+        catch { presentError(error) }
+    }
+
+    func reveal(recordID: UUID) {
+        guard let app = snapshot.applications[recordID] else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([app.bundleURL])
+    }
+
+    func unhide(recordID: UUID) {
+        do { try repository.setHidden(false, recordID: recordID); try reloadSnapshot() }
+        catch { presentError(error) }
+    }
+
+    func application(for recordID: UUID) -> InstalledApplication? { snapshot.applications[recordID] }
+
+    func removeApplication(recordID: UUID) {
+        do {
+            try repository.deleteApplication(recordID: recordID)
+            selectedApplicationRecordIDs.remove(recordID)
+            try reloadSnapshot()
+        } catch { presentError(error) }
+    }
+
+    func hideSelectedApplications() {
+        do {
+            for recordID in selectedApplicationRecordIDs { try repository.setHidden(true, recordID: recordID) }
+            selectedApplicationRecordIDs.removeAll()
+            isMultiSelecting = false
+            try reloadSnapshot()
+        } catch { presentError(error) }
     }
 
     func reveal(entry: LauncherEntry) {
@@ -325,11 +421,9 @@ final class LauncherViewModel {
         returningToOrigin = false
         groupingTargetID = nil
         lastReorderTargetID = nil
-        dragPreviewEntries = Self.compactedEntries(
-            afterLifting: entry.id,
-            from: snapshot.entries,
-            capacity: settings.gridCapacity
-        )
+        // Keep the source view alive for the whole native dragging session.
+        // Removing it from ForEach here cancels AppKit's source before drop.
+        dragPreviewEntries = snapshot.entries
     }
 
     func isDragging(_ entry: LauncherEntry) -> Bool {
@@ -450,7 +544,7 @@ final class LauncherViewModel {
             groupingTargetID = nil
             groupingCandidateID = target.id
             groupingHoverTask = Task { @MainActor [weak self] in
-                try? await Task.sleep(for: .milliseconds(600))
+                try? await Task.sleep(for: .milliseconds(180))
                 guard !Task.isCancelled,
                       self?.draggedEntryID == sourceID,
                       self?.groupingCandidateID == target.id else { return }
@@ -474,7 +568,7 @@ final class LauncherViewModel {
         if groupingTargetID == target.id { groupingTargetID = nil }
     }
 
-    func performDrop(on target: LauncherEntry) -> Bool {
+    func performDrop(on target: LauncherEntry, grouping: Bool = false) -> Bool {
         defer { finishDragging() }
         guard isEditing,
               let sourceID = draggedEntryID else { return false }
@@ -500,7 +594,7 @@ final class LauncherViewModel {
             }
             guard let source = snapshot.entries.first(where: { $0.id == sourceID }) else { return false }
             let createdFolderID: UUID?
-            if groupingTargetID == target.id,
+            if (grouping || groupingTargetID == target.id),
                source.kind == .application,
                target.kind == .application {
                 createdFolderID = try repository.createFolder(draggedEntryID: sourceID, targetEntryID: target.id)
@@ -513,6 +607,8 @@ final class LauncherViewModel {
             if let createdFolderID {
                 openedFolderID = createdFolderID
                 renamingFolderID = createdFolderID
+                isEditing = false
+                selectedApplicationRecordIDs.removeAll()
             }
             return true
         } catch {
@@ -748,7 +844,8 @@ final class LauncherViewModel {
               let folder = openedFolder,
               folder.childApplicationRecordIDs.contains(recordID) else { return }
         draggedFolderApplicationRecordID = recordID
-        folderDragPreviewRecordIDs = folder.childApplicationRecordIDs.filter { $0 != recordID }
+        // SwiftUI's drag source must remain in the folder hierarchy until drop.
+        folderDragPreviewRecordIDs = folder.childApplicationRecordIDs
     }
 
     func isDraggingFolderApplication(recordID: UUID) -> Bool {

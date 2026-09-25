@@ -1,111 +1,50 @@
 # LaunchpadX
 
 <p align="center">
-  <img src="LaunchpadX/AppIcon.icon/Assets/AppIcon-512@2x.png" width="160" alt="LaunchpadX 图标">
+  <img src="LaunchpadX/AppIcon.icon/Assets/AppIcon-512@2x.png" width="128" alt="LaunchpadX app icon">
 </p>
 
-LaunchpadX 是一款使用 SwiftUI 与 AppKit 编写的原生 macOS 应用启动器，目标是在 macOS 26 中延续 macOS 15.6 经典“启动台”的核心操作体验。
+<p align="center">
+  <strong>为 macOS 打造的原生应用启动台</strong><br>
+  A native, customizable app launcher for macOS
+</p>
 
-当前版本：**1.0（Build 24）**
+<p align="center">
+  <img alt="macOS 26+" src="https://img.shields.io/badge/macOS-26%2B-111111?logo=apple">
+  <img alt="Swift 6" src="https://img.shields.io/badge/Swift-6-orange?logo=swift">
+  <a href="LICENSE"><img alt="GPL-3.0 license" src="https://img.shields.io/badge/License-GPL--3.0-blue.svg"></a>
+</p>
 
-## 功能
+LaunchpadX is an open-source macOS launcher built with SwiftUI and AppKit. It brings back a fast, familiar app grid with folders, search, gestures, and both full-screen and resizable window modes.
 
-### 启动与系统集成
+LaunchpadX 是一款使用 SwiftUI 和 AppKit 开发的 macOS 开源启动器。它提供熟悉的应用网格、文件夹和快速搜索，并支持全屏与可调整大小的窗口模式。
 
-- 原生全屏启动器面板，支持多显示器。
-- 默认全局快捷键为 `⌥ Space`，可在设置中重新录制。
-- 支持菜单栏入口和 Dock 图标。
-- 支持登录时启动。
-- 使用 Carbon 全局快捷键，不需要辅助功能权限。
-- 防止重复运行；再次打开应用会激活已经运行的 LaunchpadX。
-- 首次扫描在后台低优先级执行，避免阻塞菜单栏和启动器交互。
-- 保留目录变更监听，并每 15 分钟进行一次无提示补充扫描；重叠的扫描请求会自动合并。
-- 定时扫描结果无变化时不会刷新启动器网格；应用图标会分批预热，避免首次打开集中阻塞主线程。
-- 扫描并监听以下应用目录：
-  - `/Applications`
-  - `/System/Applications`
-  - `/System/Cryptexes/App/System/Applications`
-  - `~/Applications`
+<p align="center">
+  <img src="docs/images/launchpadx-window.jpg" width="900" alt="LaunchpadX window mode with Liquid Glass appearance and app grid">
+</p>
 
-### 浏览与搜索
+**Development build:** 1.0 (Build 44) · **License:** GPL-3.0 · **Minimum system:** macOS 26
 
-- 显示应用真实图标和系统本地化名称。
-- 支持按应用名称、别名、Bundle ID、拼音全拼和拼音首字母搜索。
-- 搜索结果会优先展示完全匹配、前缀匹配和名称包含匹配，使用频率只用于文本结果之间的轻量排序。
-- 最多展示 9 个高相关结果，避免无关应用混入。
-- 支持方向键、Enter 和自定义上一页/下一页快捷键。
+> This repository does not currently publish signed, notarized release binaries. Build the app with Xcode to try it.
 
-### 妙控板与键盘
+## Features
 
-- 双指向左滑动：下一页。
-- 双指向右滑动：上一页。
-- 每次手势只翻一页，忽略惯性阶段造成的重复翻页。
-- 可在设置中启用“翻页方向反转”。
-- 五指捏合可尝试唤起 LaunchpadX。
-- `Esc` 关闭文件夹、退出编辑或关闭启动器。
+- **Two presentation modes:** a full-screen launcher or a resizable standard window, with a dark Liquid Glass appearance.
+- **Flexible app grid:** switch between paged and vertically scrolling layouts; adjust icon size, rows, columns, and display selection.
+- **Fast search:** find apps by name, alias, bundle identifier, pinyin, or pinyin initials.
+- **Folders and editing:** long-press to edit, drag to reorder apps, create folders, and move apps in or out of folders.
+- **App management:** rename or hide apps, add scan locations, select apps in batches, and move supported apps to Trash after confirmation.
+- **Shortcuts and gestures:** configure the global launch shortcut, page controls, trackpad swipes, F4, and optional hot corners.
+- **Menu bar and Dock:** choose how LaunchpadX appears in macOS and optionally start it at login.
+- **LaunchOS layout import:** optionally import matching app order, aliases, hidden state, and folders from the local LaunchOS database. The source data is read-only and retained.
+- **Low-overhead scanning:** monitor app directories for changes and refresh the index in the background.
 
-> 五指捏合依赖 macOS 是否把该手势事件传递给应用，可能受到系统手势设置影响。`⌥ Space` 是稳定可用的全局唤起方式。
+## Requirements
 
-### 编辑、排序与文件夹
+- macOS 26 or later
+- Xcode 26 or later
 
-- 长按应用图标 1 秒进入编辑模式，所有应用进入抖动状态。
-- 长按触发后无需松开或移动光标，可直接继续拖拽。
-- 拖拽应用可调整位置，其他图标实时向空位补齐。
-- 背景和分页采用静态缓存与按需渲染，减少 Intel Mac 上拖拽时的图形合成压力。
-- 页内移除应用后保留该页边界，不会自动从下一页抽取应用补位。
-- 拖拽至左、右屏幕边缘可分别移动到上一页、下一页；首尾页不会越界。
-- 将应用叠放到另一应用上可创建文件夹，并自动打开文件夹进行命名。
-- 编辑模式下可打开已有文件夹、调整文件夹内应用顺序、拖入新应用或把应用移回外部。
-- 文件夹少于两个应用时自动解散，剩余应用保留在文件夹原位置。
-- 点击非应用图标的空白区域退出编辑模式。
-
-### 设置
-
-设置窗口只保留与启动台体验直接相关的项目：
-
-- 常规：登录启动、打开时聚焦搜索、翻页方向反转。
-- 快捷键：唤起 LaunchpadX、上一页和下一页。
-- 布局：恢复应用排列、重新扫描应用。
-
-## 技术栈
-
-- macOS 26.0+
-- Swift 6
-- SwiftUI + AppKit
-- SwiftData
-- `NSWorkspace`、FSEvents、Carbon Hot Keys、ServiceManagement
-- App Sandbox：关闭
-- Hardened Runtime：开启
-
-关闭 Sandbox 是为了扫描系统应用目录、监听应用安装与卸载并读取真实应用图标。该项目当前定位为本机自用和开源构建，不面向 Mac App Store。
-
-## 项目结构
-
-```text
-LaunchpadX/
-├── App/                    # 应用入口、依赖装配、菜单栏
-├── Domain/                 # 启动器领域模型
-├── Features/
-│   ├── Launcher/          # 启动器界面、拖拽、手势、搜索
-│   └── Settings/          # 设置界面与快捷键录制
-├── Persistence/           # SwiftData Schema 与布局仓库
-├── Services/              # 扫描、搜索、快捷键、登录项、监听服务
-├── Shared/                # 设计令牌
-└── Window/                # AppKit 面板与窗口控制器
-
-Scripts/
-├── generate-app-icons.swift
-└── package-dmg.sh
-```
-
-## 本地开发
-
-### 环境要求
-
-- macOS 26.0 或更高版本
-- Xcode 26 或更高版本
-
-### 使用 Xcode
+## Build and run
 
 ```bash
 git clone https://github.com/prometheus-lumen/MAC-LAUNCHPADX.git
@@ -113,89 +52,47 @@ cd MAC-LAUNCHPADX
 open LaunchpadX.xcodeproj
 ```
 
-在 Xcode 中选择 `LaunchpadX` Scheme 后运行。
-
-### 命令行构建
-
-Debug 构建：
-
-```bash
-xcodebuild build \
-  -project LaunchpadX.xcodeproj \
-  -scheme LaunchpadX \
-  -configuration Debug \
-  -destination 'platform=macOS'
-```
-
-当前 Intel Mac 自用 Release 构建：
+Choose the `LaunchpadX` scheme in Xcode and run it. To build from Terminal:
 
 ```bash
 xcodebuild build \
   -project LaunchpadX.xcodeproj \
   -scheme LaunchpadX \
   -configuration Release \
-  -destination 'platform=macOS,arch=x86_64' \
-  ARCHS=x86_64 \
-  ONLY_ACTIVE_ARCH=YES \
-  CONFIGURATION_BUILD_DIR="$PWD/build/Release" \
-  CODE_SIGN_IDENTITY=- \
-  CODE_SIGNING_REQUIRED=YES
+  -destination 'platform=macOS'
 ```
 
-## 测试
+## Notes
 
-运行全部单元测试和 UI 测试：
+- The default launcher shortcut is `⌥ Space`. Change it in Settings if it conflicts with another app or system shortcut.
+- Core launching and global shortcuts do not require Accessibility access. Optional hot-corner features may request it when enabled.
+- App Sandbox is disabled so the launcher can discover apps in system locations, monitor app folders, and read app icons. This project is distributed for local use and open-source builds, not through the Mac App Store.
+- The included tests cover search, layout persistence, folders, gestures, app discovery, and UI interactions.
 
-```bash
-xcodebuild test \
-  -project LaunchpadX.xcodeproj \
-  -scheme LaunchpadX \
-  -destination 'platform=macOS,arch=x86_64'
-```
-
-当前回归基线包含 28 项单元测试和 8 项核心 UI 测试，覆盖：
-
-- 搜索精度、中文拼音与 Bundle ID 匹配。
-- 双指翻页方向、方向反转和单次手势锁定。
-- 页内排序、跨页移动及分页边界。
-- 长按编辑、空白点击退出和位置持久化。
-- 文件夹创建、重命名、拖入、内部排序、拖出和自动解散。
-- Dock/菜单栏图标使用独立的固定尺寸图像，避免共享图像尺寸被系统刷新污染。
-
-## 生成 DMG
-
-先完成 Release 构建，再执行：
-
-```bash
-Scripts/package-dmg.sh
-```
-
-输出文件位于：
+## Project structure
 
 ```text
-build/LaunchpadX.dmg
+LaunchpadX/
+├── App/                    # App entry point and dependency setup
+├── Domain/                 # Launcher models
+├── Features/
+│   ├── Launcher/           # Grid, search, folders, drag and gestures
+│   └── Settings/           # Settings and shortcut recording
+├── Persistence/            # SwiftData models, layout repository and importer
+├── Services/                # Discovery, search, shortcuts and monitoring
+├── Shared/                  # Shared styles and design values
+└── Window/                  # AppKit windows and panels
+
+LaunchpadXTests/             # Unit tests
+LaunchpadXUITests/           # UI tests
+Scripts/                     # Icon generation and DMG packaging
+docs/images/                 # Project screenshots
 ```
 
-脚本会对应用进行 ad-hoc 签名并保留 Hardened Runtime，同时在 DMG 中加入 `/Applications` 快捷方式。
+## Contributing
 
-当前流程不包含 Developer ID 签名、公证、自动更新或 Mac App Store 发布。首次运行自行构建的版本时，macOS 可能要求用户在 Finder 中右键选择“打开”。
+Issues and pull requests are welcome. Please keep changes focused and include reproduction steps for bug reports.
 
-## 应用图标
+## License
 
-主图标源文件：
-
-```text
-LaunchpadX/AppIcon.icon/Assets/AppIcon-512@2x.png
-```
-
-重新生成传统 AppIcon 图片：
-
-```bash
-swift Scripts/generate-app-icons.swift \
-  LaunchpadX/AppIcon.icon/Assets/AppIcon-512@2x.png \
-  LaunchpadX/Assets.xcassets/AppIcon.appiconset
-```
-
-## 许可证
-
-本项目使用 [GNU General Public License v3.0](LICENSE)。
+LaunchpadX is distributed under the [GNU General Public License v3.0](LICENSE).

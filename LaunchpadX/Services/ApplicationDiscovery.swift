@@ -27,9 +27,7 @@ struct ApplicationDiscoveryService: ApplicationDiscovering {
 
     nonisolated private static func scanSynchronously(roots: [URL]) -> [InstalledApplication] {
         let manager = FileManager.default
-        let ownURL = Bundle.main.bundleURL.standardizedFileURL
         var result: [InstalledApplication] = []
-        var seenPaths = Set<String>()
         for root in roots {
             guard let enumerator = manager.enumerator(
                 at: root,
@@ -40,17 +38,52 @@ struct ApplicationDiscoveryService: ApplicationDiscovering {
             for case let url as URL in enumerator {
                 guard url.pathExtension.lowercased() == "app" else { continue }
                 enumerator.skipDescendants()
-                let standardized = url.standardizedFileURL
-                guard standardized != ownURL,
-                      let app = parseApplication(at: standardized, root: root),
-                      seenPaths.insert(app.normalizedPath).inserted else { continue }
+                let canonicalURL = url.resolvingSymlinksInPath().standardizedFileURL
+                guard let app = parseApplication(at: canonicalURL) else { continue }
                 result.append(app)
             }
         }
-        return result.sorted { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }
+        return deduplicated(result, currentApplicationURL: Bundle.main.bundleURL)
     }
 
-    nonisolated private static func parseApplication(at url: URL, root: URL) -> InstalledApplication? {
+    nonisolated static func deduplicated(
+        _ applications: [InstalledApplication],
+        currentApplicationURL: URL
+    ) -> [InstalledApplication] {
+        let currentPath = currentApplicationURL.resolvingSymlinksInPath().standardizedFileURL.path.lowercased()
+        let homeApplications = (NSHomeDirectory() + "/Applications/").lowercased()
+        func priority(_ app: InstalledApplication) -> (Int, Int, String) {
+            let path = app.bundleURL.resolvingSymlinksInPath().standardizedFileURL.path.lowercased()
+            let location: Int
+            if path == currentPath { location = 0 }
+            else if URL(fileURLWithPath: path).deletingLastPathComponent().path == "/applications" { location = 1 }
+            else if path.hasPrefix(homeApplications) { location = 2 }
+            else if path.hasPrefix("/system/") { location = 3 }
+            else { location = 4 }
+            return (location, path.count, path)
+        }
+        let ordered = applications.sorted {
+            let lhs = priority($0)
+            let rhs = priority($1)
+            if lhs.0 != rhs.0 { return lhs.0 < rhs.0 }
+            if lhs.1 != rhs.1 { return lhs.1 < rhs.1 }
+            return lhs.2 < rhs.2
+        }
+        var seenPaths = Set<String>()
+        var seenBundleIDs = Set<String>()
+        let unique = ordered.filter { app in
+            let physicalPath = app.bundleURL.resolvingSymlinksInPath().standardizedFileURL.path.lowercased()
+            guard seenPaths.insert(physicalPath).inserted else { return false }
+            guard let bundleID = app.bundleIdentifier?.lowercased(), !bundleID.isEmpty else { return true }
+            return seenBundleIDs.insert(bundleID).inserted
+        }
+        return unique.sorted {
+            let order = $0.displayName.localizedStandardCompare($1.displayName)
+            return order == .orderedSame ? $0.normalizedPath < $1.normalizedPath : order == .orderedAscending
+        }
+    }
+
+    nonisolated private static func parseApplication(at url: URL) -> InstalledApplication? {
         guard let bundle = Bundle(url: url),
               let executable = bundle.executableURL,
               FileManager.default.isExecutableFile(atPath: executable.path) else { return nil }
@@ -69,7 +102,7 @@ struct ApplicationDiscoveryService: ApplicationDiscovering {
             displayName: name,
             bundleURL: url,
             version: info["CFBundleShortVersionString"] as? String,
-            isSystemApplication: root.path.hasPrefix("/System")
+            isSystemApplication: url.path.hasPrefix("/System/")
         )
     }
 

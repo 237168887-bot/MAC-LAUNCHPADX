@@ -3,7 +3,10 @@ import SwiftUI
 
 @MainActor
 final class SettingsWindowController: NSWindowController {
+    private let loginItems: LoginItemManager
+
     init(environment: AppEnvironment) {
+        loginItems = environment.loginItems
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 780, height: 520),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
@@ -21,6 +24,7 @@ final class SettingsWindowController: NSWindowController {
     required init?(coder: NSCoder) { nil }
 
     func show() {
+        loginItems.refresh()
         showWindow(nil)
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)

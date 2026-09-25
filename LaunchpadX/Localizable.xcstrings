@@ -13,7 +13,13 @@
     "Shortcuts" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Shortcuts" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "快捷键" } } } },
     "Displays" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Displays" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "显示器" } } } },
     "Advanced" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Advanced" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "高级" } } } },
-    "About LaunchpadX" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "About LaunchpadX" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "关于 LaunchpadX" } } } }
+    "About LaunchpadX" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "About LaunchpadX" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "关于 LaunchpadX" } } } },
+    "Move to Trash" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Move to Trash" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "移到废纸篓" } } } },
+    "Cancel" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Cancel" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "取消" } } } },
+    "Move selected applications to Trash?" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Move selected applications to Trash?" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "确定将所选应用移到废纸篓吗？" } } } },
+    "The confirmation window is unavailable." : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "The confirmation window is unavailable." } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "无法显示确认窗口。" } } } },
+    "These applications will be moved to the macOS Trash and can be restored from there. Application support data is left in place." : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "These applications will be moved to the macOS Trash and can be restored from there. Application support data is left in place." } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "这些应用会移入 macOS 废纸篓，可从废纸篓恢复。应用支持数据会保留。" } } } },
+    "System applications cannot be moved to Trash." : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "System applications cannot be moved to Trash." } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "系统应用不能移入废纸篓。" } } } }
   },
   "version" : "1.0"
 }

@@ -1,6 +1,13 @@
 import AppKit
 
 final class LauncherPanel: NSPanel {
+    var pointerRouter: LauncherPointerRouter?
+
+    override func sendEvent(_ event: NSEvent) {
+        if pointerRouter?.consume(event, in: self) == true { return }
+        super.sendEvent(event)
+    }
+
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
 

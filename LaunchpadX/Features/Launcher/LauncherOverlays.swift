@@ -67,6 +67,7 @@ struct FolderOverlayView: View {
     @Environment(\.colorSchemeContrast) private var contrast
     @Bindable var viewModel: LauncherViewModel
     let folder: LauncherEntry
+    let requestTrash: (UUID) -> Void
     @State private var draftName = ""
     @FocusState private var nameFocused: Bool
 
@@ -146,11 +147,12 @@ struct FolderOverlayView: View {
         application: InstalledApplication
     ) -> some View {
         let tile = FolderApplicationTile(
-            title: application.displayName,
+            title: viewModel.snapshot.applicationAliases[recordID] ?? application.displayName,
             image: viewModel.icon(for: application),
-            editing: viewModel.isEditing
+            editing: viewModel.isEditing,
+            selected: viewModel.selectedApplicationRecordIDs.contains(recordID)
         )
-        .opacity(viewModel.isDraggingFolderApplication(recordID: recordID) ? 0 : 1)
+        .opacity(viewModel.isDraggingFolderApplication(recordID: recordID) ? 0.28 : 1)
         .contextMenu {
             if viewModel.isEditing {
                 Button(String(localized: "Remove from Folder")) {
@@ -162,35 +164,66 @@ struct FolderOverlayView: View {
             }
         }
 
-        if viewModel.isEditing {
-            tile
-                .onDrag {
-                    viewModel.folderDragProvider(recordID: recordID)
-                } preview: {
-                    Image(nsImage: viewModel.icon(for: application))
-                        .resizable()
-                        .interpolation(.high)
-                        .scaledToFit()
-                        .frame(width: 82, height: 82)
-                        .scaleEffect(1.06)
-                        .shadow(color: .black.opacity(0.32), radius: 12, y: 7)
-                }
-                .onDrop(
-                    of: [UTType.plainText],
-                    delegate: FolderApplicationDropDelegate(
-                        recordID: recordID,
-                        viewModel: viewModel
-                    )
-                )
-        } else {
-            Button {
-                viewModel.launch(application: application, recordID: recordID)
-            } label: {
+        Group {
+            if viewModel.isEditing {
                 tile
+                    .onDrag {
+                        viewModel.folderDragProvider(recordID: recordID)
+                    } preview: {
+                        Image(nsImage: viewModel.icon(for: application))
+                            .resizable()
+                            .interpolation(.high)
+                            .scaledToFit()
+                            .frame(width: 82, height: 82)
+                            .scaleEffect(1.06)
+                            .shadow(color: .black.opacity(0.32), radius: 12, y: 7)
+                    }
+                    .onDrop(
+                        of: [UTType.plainText],
+                        delegate: FolderApplicationDropDelegate(
+                            recordID: recordID,
+                            viewModel: viewModel
+                        )
+                    )
+            } else if viewModel.isMultiSelecting {
+                Button {
+                    viewModel.toggleSelection(for: recordID)
+                } label: {
+                    tile
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(viewModel.snapshot.applicationAliases[recordID] ?? application.displayName)
+                .accessibilityIdentifier("folder.tile")
+            } else {
+                Button {
+                    if !viewModel.isOptionUninstallMode {
+                        viewModel.launch(application: application, recordID: recordID)
+                    }
+                } label: {
+                    tile
+                }
+                .disabled(viewModel.isOptionUninstallMode)
+                .buttonStyle(.plain)
+                .accessibilityLabel(application.displayName)
+                .accessibilityIdentifier("folder.tile")
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel(application.displayName)
-            .accessibilityIdentifier("folder.tile")
+        }
+        .overlay(alignment: .topTrailing) {
+            if viewModel.isOptionUninstallMode, application.canMoveToTrash {
+                Button { requestTrash(recordID) } label: {
+                    Image(systemName: "minus.circle.fill")
+                        .font(.system(size: 21, weight: .semibold))
+                        .symbolRenderingMode(.palette)
+                        .foregroundStyle(.white, .red)
+                        .shadow(color: .black.opacity(0.65), radius: 3, y: 1)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(String(localized: "Move to Trash"))
+                .accessibilityValue(application.displayName)
+                .accessibilityIdentifier("folder.uninstall.\(recordID.uuidString)")
+                .padding(.top, 2)
+                .padding(.trailing, 12)
+            }
         }
     }
 }
@@ -199,22 +232,11 @@ private struct FolderApplicationTile: View {
     let title: String
     let image: NSImage
     let editing: Bool
+    let selected: Bool
 
     var body: some View {
-        Group {
-            if editing {
-                tileContent
-                    .phaseAnimator([false, true]) { content, phase in
-                        content
-                            .rotationEffect(.degrees(phase ? 0.82 : -0.82))
-                            .offset(x: phase ? 0.34 : -0.34)
-                    } animation: { _ in
-                        .easeInOut(duration: 0.13)
-                    }
-            } else {
-                tileContent
-            }
-        }
+        tileContent
+            .rotationEffect(.degrees(editing ? 0.6 : 0))
         .contentShape(Rectangle())
         .accessibilityLabel(title)
         .accessibilityIdentifier("folder.tile")
@@ -227,6 +249,14 @@ private struct FolderApplicationTile: View {
                 .interpolation(.high)
                 .scaledToFit()
                 .frame(width: 82, height: 82)
+                .overlay(alignment: .topTrailing) {
+                    if selected {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 22, weight: .semibold))
+                            .foregroundStyle(.white, Color.accentColor)
+                            .shadow(color: .black.opacity(0.3), radius: 4, y: 2)
+                    }
+                }
             Text(title)
                 .font(.system(size: 12))
                 .lineLimit(1)
