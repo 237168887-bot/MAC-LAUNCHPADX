@@ -942,9 +942,9 @@ private struct LauncherBackgroundView: View {
     var body: some View {
         Rectangle()
             .fill(.clear)
-            .glassEffect(.regular.tint(.black.opacity(0.28)), in: Rectangle())
-            .overlay { Rectangle().fill(.black.opacity(0.30)) }
-            .overlay { Rectangle().fill(.white.opacity(0.035)) }
+            .glassEffect(.regular.tint(.black.opacity(0.18)), in: Rectangle())
+            .overlay { Rectangle().fill(.black.opacity(0.20)) }
+            .overlay { Rectangle().fill(.white.opacity(0.07)) }
             .ignoresSafeArea()
     }
 }
