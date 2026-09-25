@@ -541,7 +541,7 @@ private struct PagedLauncherGrid<Content: View>: View {
                     }
                 }
                 .offset(x: -CGFloat(viewModel.selectedPage) * proxy.size.width)
-                .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: viewModel.selectedPage)
+                .animation(reduceMotion ? nil : .smooth(duration: 0.28, extraBounce: 0), value: viewModel.selectedPage)
             }
             .simultaneousGesture(
                 SpatialTapGesture(coordinateSpace: .global).onEnded { tap in
@@ -580,7 +580,7 @@ private struct PagedLauncherGrid<Content: View>: View {
             retainedPage = oldPage
             pageReleaseTask?.cancel()
             pageReleaseTask = Task { @MainActor in
-                try? await Task.sleep(for: .milliseconds(180))
+                try? await Task.sleep(for: .milliseconds(300))
                 guard !Task.isCancelled, viewModel.selectedPage == newPage else { return }
                 retainedPage = newPage
                 isPageTransitioning = false
@@ -942,9 +942,9 @@ private struct LauncherBackgroundView: View {
     var body: some View {
         Rectangle()
             .fill(.clear)
-            .glassEffect(.regular.tint(.black.opacity(0.18)), in: Rectangle())
-            .overlay { Rectangle().fill(.black.opacity(0.20)) }
-            .overlay { Rectangle().fill(.white.opacity(0.07)) }
+            .glassEffect(.regular.tint(.white.opacity(0.16)), in: Rectangle())
+            .overlay { Rectangle().fill(.black.opacity(0.08)) }
+            .overlay { Rectangle().fill(.white.opacity(0.12)) }
             .ignoresSafeArea()
     }
 }
