@@ -107,7 +107,8 @@ final class AppEnvironment {
             launcherViewModel.setOptionUninstallMode(true)
         }
         if ProcessInfo.processInfo.arguments.contains("--ui-testing-fixtures") {
-            let fixtureCount = ProcessInfo.processInfo.arguments.contains("--ui-testing-many-fixtures") ? 160 : 8
+            let fixtureCount = ProcessInfo.processInfo.arguments.contains("--ui-testing-many-fixtures") ? 160
+                : ProcessInfo.processInfo.arguments.contains("--ui-testing-full-folder") ? 30 : 8
             let fixtures = (0..<fixtureCount).map { index in
                 InstalledApplication(
                     bundleIdentifier: "com.launchpadx.ui-fixture.\(index)",
@@ -124,6 +125,11 @@ final class AppEnvironment {
                         draggedEntryID: snapshot.entries[2].id,
                         targetEntryID: snapshot.entries[1].id
                     ) {
+                        if ProcessInfo.processInfo.arguments.contains("--ui-testing-full-folder") {
+                            for entry in snapshot.entries.dropFirst(3).prefix(23) {
+                                try repository.addRootApplication(entry.id, toFolder: folderID)
+                            }
+                        }
                         try repository.renameFolder(id: folderID, name: "Fixture Folder")
                         try launcherViewModel.reloadSnapshot()
                         if ProcessInfo.processInfo.arguments.contains("--ui-testing-open-folder"),

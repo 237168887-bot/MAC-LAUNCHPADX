@@ -32,7 +32,7 @@ LaunchpadX 是一款使用 SwiftUI 和 AppKit 开发的 macOS 开源启动器。
 
 ![LaunchpadX 全屏模式](docs/images/launchpadx-full-screen.png)
 
-**Development build:** 1.0 (Build 45) · **License:** GPL-3.0 · **Minimum system:** macOS 26
+**Development build:** 1.0 (Build 46) · **License:** GPL-3.0 · **Minimum system:** macOS 26
 
 > This repository does not currently publish signed, notarized release binaries. Build the app with Xcode to try it.
 
@@ -41,7 +41,7 @@ LaunchpadX 是一款使用 SwiftUI 和 AppKit 开发的 macOS 开源启动器。
 - **Two presentation modes:** a full-screen launcher or a resizable window, both with adaptive Liquid Glass, a subtle glow, and readable light/dark folder borders.
 - **Flexible app grid:** switch between paged and vertically scrolling layouts; adjust icon size, rows, columns, and display selection.
 - **Fast search:** an easy-to-reach search bar finds apps by name, alias, bundle identifier, pinyin, or pinyin initials.
-- **Folders and editing:** long-press to edit, drag to reorder apps, create folders, and move apps in or out of folders.
+- **Folders and editing:** long-press to edit, drag to reorder apps, create folders, and move apps in or out of folders. Folder panels adapt to window size, scroll independently, and close when you click outside.
 - **App management:** rename or hide apps, add scan locations, and select apps in batches. Context-menu and batch removal move apps to Trash. Holding Option reveals a glass-style remove control for confirmed permanent deletion of an eligible app, with an optional exact-match data cleanup choice.
 - **Shortcuts and gestures:** configure the global launch shortcut, page controls, trackpad swipes, F4, and optional hot corners.
 - **Menu bar and Dock:** drag app icons to the Dock, choose whether LaunchpadX appears in the menu bar, and optionally start it quietly at login.

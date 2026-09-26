@@ -156,13 +156,22 @@ struct LauncherView: View {
                     ?? CGPoint(x: proxy.size.width / 2, y: proxy.size.height / 2)
                 Color.black.opacity(0.32)
                     .ignoresSafeArea()
-                    .onTapGesture { handleBackgroundTap() }
+                    .contentShape(Rectangle())
+                    .highPriorityGesture(TapGesture().onEnded { handleBackgroundTap() })
                     .onDrop(of: [UTType.plainText], delegate: FolderOutsideDropDelegate(viewModel: viewModel))
                     .transition(.opacity)
                     .zIndex(0)
-                FolderOverlayView(viewModel: viewModel, folder: folder) { recordID in
+                FolderOverlayView(viewModel: viewModel, folder: folder, availableSize: proxy.size) { recordID in
                     requestPermanentUninstall(recordID)
                 }
+                    .onAppear { pointerRouter.folderFrame = folderPanelFrame(in: proxy.size) }
+                    .onChange(of: viewModel.openedFolderApplications.count) { _, _ in
+                        pointerRouter.folderFrame = folderPanelFrame(in: proxy.size)
+                    }
+                    .onChange(of: proxy.size) { _, newSize in
+                        pointerRouter.folderFrame = folderPanelFrame(in: newSize)
+                    }
+                    .onDisappear { pointerRouter.folderFrame = nil }
                     .transition(reduceMotion ? .opacity : .scale(scale: 0.16)
                         .combined(with: .offset(x: origin.x - proxy.size.width / 2,
                                                 y: origin.y - proxy.size.height / 2))
@@ -170,11 +179,23 @@ struct LauncherView: View {
                     .zIndex(1)
             }
         }
+        .frame(width: proxy.size.width, height: proxy.size.height)
+        .contentShape(Rectangle())
         .animation(
             reduceMotion ? .linear(duration: 0.12) : .smooth(duration: 0.34, extraBounce: 0),
             value: viewModel.openedFolderID
         )
         .allowsHitTesting(viewModel.openedFolderID != nil)
+    }
+
+    private func folderPanelFrame(in availableSize: CGSize) -> CGRect {
+        let width = min(800, max(280, availableSize.width - 32))
+        let columns = max(2, min(5, Int((width - 48 + 18) / (112 + 18))))
+        let rows = (viewModel.openedFolderApplications.count + columns - 1) / columns
+        let height = min(650, availableSize.height - 32, max(240, CGFloat(rows) * 132 + 108))
+        return CGRect(x: (availableSize.width - width) / 2,
+                      y: (availableSize.height - height) / 2,
+                      width: width, height: height)
     }
 
     private var launcherCanvas: some View {
@@ -538,6 +559,11 @@ struct LauncherView: View {
     }
 
     private func handleBackgroundTap() {
+        if viewModel.openedFolderID != nil {
+            if viewModel.isEditing { viewModel.endEditing() }
+            viewModel.closeFolder()
+            return
+        }
         guard !viewModel.isDraggingSession else { return }
         if viewModel.isEditing {
             var transaction = Transaction(animation: nil)
@@ -546,8 +572,7 @@ struct LauncherView: View {
                 viewModel.endEditing()
             }
         }
-        if viewModel.openedFolderID != nil { viewModel.closeFolder() }
-        else { viewModel.onDismiss?() }
+        viewModel.onDismiss?()
     }
 
     private var pageControl: some View {

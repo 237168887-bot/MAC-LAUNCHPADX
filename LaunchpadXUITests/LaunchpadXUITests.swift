@@ -11,6 +11,36 @@ import XCTest
 final class LaunchpadXUITests: XCTestCase {
 
     @MainActor
+    func testFolderScrollAndOutsideTapInBothModes() throws {
+        for windowMode in [false, true] {
+            let app = XCUIApplication()
+            app.launchArguments = [
+                "--show-launcher-for-ui-testing", "--ui-testing-isolated-data",
+                "--ui-testing-fixtures", "--ui-testing-existing-folder", "--ui-testing-full-folder",
+            ] + (windowMode ? ["--ui-testing-window-mode"] : [])
+            app.launch()
+            app.activate()
+            let folder = app.buttons["Fixture Folder"].firstMatch
+            XCTAssertTrue(folder.waitForExistence(timeout: 8))
+            folder.click()
+            let first = app.descendants(matching: .any)
+                .matching(identifier: "folder.tile").matching(NSPredicate(format: "label == %@", "Fixture 1")).firstMatch
+            let last = app.descendants(matching: .any)
+                .matching(identifier: "folder.tile").matching(NSPredicate(format: "label == %@", "Fixture 25")).firstMatch
+            XCTAssertTrue(first.waitForExistence(timeout: 4))
+            let folderScroll = app.scrollViews.firstMatch
+            XCTAssertTrue(folderScroll.exists, app.debugDescription)
+            folderScroll.swipeUp()
+            XCTAssertTrue(last.waitForExistence(timeout: 3))
+            XCTAssertTrue(last.isHittable)
+            let panel = windowMode ? app.windows.firstMatch : app.dialogs.firstMatch
+            panel.coordinate(withNormalizedOffset: CGVector(dx: 0.03, dy: 0.5)).click()
+            XCTAssertFalse(first.exists)
+            app.terminate()
+        }
+    }
+
+    @MainActor
     func testCaptureWindowModeShowcaseScreenshot() throws {
         let app = XCUIApplication()
         app.launchArguments = ["--show-launcher-for-ui-testing", "--ui-testing-isolated-data", "--ui-testing-showcase", "--ui-testing-window-mode"]
@@ -394,11 +424,11 @@ final class LaunchpadXUITests: XCTestCase {
 
         XCTAssertTrue(launcherPanel.exists)
         launcherPanel.coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: 0.50))
-            .tap()
-        XCTAssertEqual(root.value as? String, "normal")
+            .click()
         XCTAssertFalse(app.descendants(matching: .any)
             .matching(identifier: "folder.tile")
-            .firstMatch.exists)
+            .firstMatch.exists, app.debugDescription)
+        XCTAssertEqual(root.value as? String, "normal")
     }
 
     @MainActor

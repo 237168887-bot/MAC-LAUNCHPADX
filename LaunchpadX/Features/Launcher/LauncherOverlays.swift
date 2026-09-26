@@ -69,12 +69,17 @@ struct FolderOverlayView: View {
     @Environment(\.colorSchemeContrast) private var contrast
     @Bindable var viewModel: LauncherViewModel
     let folder: LauncherEntry
+    let availableSize: CGSize
     let requestTrash: (UUID) -> Void
     @State private var draftName = ""
     @FocusState private var nameFocused: Bool
 
     var body: some View {
-        VStack(spacing: 24) {
+        let panelWidth = min(800, max(280, availableSize.width - 32))
+        let columns = max(2, min(5, Int((panelWidth - 48 + 18) / (112 + 18))))
+        let rows = (viewModel.openedFolderApplications.count + columns - 1) / columns
+        let panelHeight = min(650, availableSize.height - 32, max(240, CGFloat(rows) * 132 + 108))
+        return VStack(spacing: 16) {
                 if viewModel.renamingFolderID == folder.id {
                     TextField(String(localized: "Folder name"), text: $draftName)
                         .textFieldStyle(.plain)
@@ -98,39 +103,44 @@ struct FolderOverlayView: View {
                         }
                         .accessibilityIdentifier("folder.name.label")
                 }
-                LazyVGrid(columns: Array(repeating: GridItem(.fixed(112), spacing: 30), count: 5), spacing: 30) {
-                    ForEach(viewModel.openedFolderApplications, id: \.0) { recordID, app in
-                        folderApplication(recordID: recordID, application: app)
+                ScrollView(.vertical) {
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 112), spacing: 18), count: columns), spacing: 22) {
+                        ForEach(viewModel.openedFolderApplications, id: \.0) { recordID, app in
+                            folderApplication(recordID: recordID, application: app)
+                                .frame(maxWidth: .infinity)
+                        }
                     }
+                    .animation(LaunchpadTheme.gridSpring, value: viewModel.openedFolderApplications.map(\.0))
+                    .padding(.vertical, 8)
                 }
-                .animation(LaunchpadTheme.gridSpring, value: viewModel.openedFolderApplications.map(\.0))
-                .padding(.bottom, 6)
+                .scrollIndicators(.visible)
+                .frame(maxHeight: .infinity)
         }
-        .padding(.horizontal, 54).padding(.vertical, 40)
-        .frame(minWidth: 660, maxWidth: 800, minHeight: 360)
-        .foregroundStyle(colorScheme == .dark ? Color.white : Color.primary)
-        .background {
-            RoundedRectangle(cornerRadius: 26, style: .continuous)
-                .fill(colorScheme == .dark
-                    ? Color(white: 0.10).opacity(reduceTransparency ? 0.98 : 0.34)
-                    : Color(white: 0.98).opacity(reduceTransparency ? 1 : 0.38))
-                .glassEffect(.regular.tint(colorScheme == .dark ? .white.opacity(0.06) : .white.opacity(0.14)), in: RoundedRectangle(cornerRadius: 26))
-                .shadow(color: .black.opacity(0.35), radius: 22, y: 12)
-        }
-        .overlay {
-            RoundedRectangle(cornerRadius: 26, style: .continuous)
-                .stroke(
-                    colorScheme == .dark
-                        ? .white.opacity(contrast == .increased ? 0.65 : 0.24)
-                        : .black.opacity(contrast == .increased ? 0.42 : 0.14),
-                    lineWidth: 1
-                )
-                .allowsHitTesting(false)
-        }
-        .onDrop(
-            of: [UTType.plainText],
-            delegate: FolderGridBackgroundDropDelegate(viewModel: viewModel)
-        )
+            .padding(.horizontal, 24).padding(.vertical, 24)
+            .frame(width: panelWidth, height: panelHeight)
+            .foregroundStyle(colorScheme == .dark ? Color.white : Color.primary)
+            .background {
+                RoundedRectangle(cornerRadius: 26, style: .continuous)
+                    .fill(colorScheme == .dark
+                        ? Color(white: 0.10).opacity(reduceTransparency ? 0.98 : 0.34)
+                        : Color(white: 0.98).opacity(reduceTransparency ? 1 : 0.38))
+                    .glassEffect(.regular.tint(colorScheme == .dark ? .white.opacity(0.06) : .white.opacity(0.14)), in: RoundedRectangle(cornerRadius: 26))
+                    .shadow(color: .black.opacity(0.35), radius: 22, y: 12)
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 26, style: .continuous)
+                    .stroke(
+                        colorScheme == .dark
+                            ? .white.opacity(contrast == .increased ? 0.65 : 0.24)
+                            : .black.opacity(contrast == .increased ? 0.42 : 0.14),
+                        lineWidth: 1
+                    )
+                    .allowsHitTesting(false)
+            }
+            .onDrop(
+                of: [UTType.plainText],
+                delegate: FolderGridBackgroundDropDelegate(viewModel: viewModel)
+            )
         .onAppear {
             draftName = folder.title
             focusNameIfNeeded()

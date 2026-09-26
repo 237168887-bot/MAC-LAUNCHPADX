@@ -5,6 +5,7 @@ import SwiftUI
 final class LauncherPointerRouter {
     var gridFrame: CGRect = .zero
     var tileFrames: [CGRect] = []
+    var folderFrame: CGRect?
     var isSuspended: () -> Bool = { false }
     var onBlankClick: () -> Void = {}
 
@@ -25,6 +26,14 @@ final class LauncherPointerRouter {
             default:
                 break
             }
+        }
+
+        if event.type == .leftMouseDown,
+           let folderFrame,
+           let point = contentPoint(for: event, in: window),
+           !folderFrame.contains(point) {
+            blankMouseDown = point
+            return true
         }
 
         guard event.type == .leftMouseDown,
