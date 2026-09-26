@@ -11,6 +11,22 @@ import XCTest
 final class LaunchpadXUITests: XCTestCase {
 
     @MainActor
+    func testApplicationContextMenuUsesChinese() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--show-launcher-for-ui-testing", "--ui-testing-isolated-data", "--ui-testing-fixtures", "--ui-testing-window-mode"]
+        app.launch()
+        app.activate()
+        let tile = app.buttons["Fixture 0"].firstMatch
+        XCTAssertTrue(tile.waitForExistence(timeout: 8))
+        tile.rightClick()
+        XCTAssertTrue(app.menuItems["重命名应用"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.menuItems["隐藏应用"].exists)
+        XCTAssertTrue(app.menuItems["在访达中显示"].exists)
+        XCTAssertTrue(app.menuItems["移到废纸篓"].exists)
+        XCTAssertFalse(app.menuItems["Rename Application"].exists)
+    }
+
+    @MainActor
     func testFolderScrollAndOutsideTapInBothModes() throws {
         for windowMode in [false, true] {
             let app = XCUIApplication()

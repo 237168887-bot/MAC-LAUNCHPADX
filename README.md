@@ -32,7 +32,7 @@ LaunchpadX 是一款使用 SwiftUI 和 AppKit 开发的 macOS 开源启动器。
 
 ![LaunchpadX 全屏模式](docs/images/launchpadx-full-screen.png)
 
-**Development build:** 1.0 (Build 46) · **License:** GPL-3.0 · **Minimum system:** macOS 26
+**Development build:** 1.0 (Build 49) · **License:** GPL-3.0 · **Minimum system:** macOS 26
 
 > This repository does not currently publish signed, notarized release binaries. Build the app with Xcode to try it.
 
@@ -46,7 +46,7 @@ LaunchpadX 是一款使用 SwiftUI 和 AppKit 开发的 macOS 开源启动器。
 - **Shortcuts and gestures:** configure the global launch shortcut, page controls, trackpad swipes, F4, and optional hot corners.
 - **Menu bar and Dock:** drag app icons to the Dock, choose whether LaunchpadX appears in the menu bar, and optionally start it quietly at login.
 - **LaunchOS layout import:** optionally import matching app order, aliases, hidden state, and folders from the local LaunchOS database. The source data is read-only and retained.
-- **Low-overhead scanning:** monitor app directories for changes and refresh the index in the background.
+- **Low-overhead scanning:** monitor app directories for changes and refresh the index in the background, including launchable menu bar apps shown in Finder's Applications view.
 
 ## Requirements
 

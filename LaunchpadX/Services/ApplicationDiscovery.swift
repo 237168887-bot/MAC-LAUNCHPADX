@@ -71,9 +71,12 @@ struct ApplicationDiscoveryService: ApplicationDiscovering {
         }
         var seenPaths = Set<String>()
         var seenBundleIDs = Set<String>()
+        var seenSystemNames = Set<String>()
         let unique = ordered.filter { app in
             let physicalPath = app.bundleURL.resolvingSymlinksInPath().standardizedFileURL.path.lowercased()
             guard seenPaths.insert(physicalPath).inserted else { return false }
+            if physicalPath.hasPrefix("/system/applications/"),
+               !seenSystemNames.insert(app.displayName.lowercased()).inserted { return false }
             guard let bundleID = app.bundleIdentifier?.lowercased(), !bundleID.isEmpty else { return true }
             return seenBundleIDs.insert(bundleID).inserted
         }
@@ -89,8 +92,9 @@ struct ApplicationDiscoveryService: ApplicationDiscovering {
               FileManager.default.isExecutableFile(atPath: executable.path) else { return nil }
         let info = bundle.infoDictionary ?? [:]
         let localizedInfo = bundle.localizedInfoDictionary ?? [:]
-        guard info["LSUIElement"] as? Bool != true,
-              info["LSBackgroundOnly"] as? Bool != true else { return nil }
+        // Menu bar apps and macOS launcher agents are visible in Finder's
+        // Applications view and are user-launchable, so include them here.
+        guard info["LSBackgroundOnly"] as? Bool != true else { return nil }
         let name = localizedMetadataName(for: url)
             ?? (localizedInfo["CFBundleDisplayName"] as? String)
             ?? (localizedInfo["CFBundleName"] as? String)

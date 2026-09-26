@@ -71,6 +71,40 @@ struct LaunchpadXTests {
         #expect(unique.filter { $0.bundleIdentifier == "com.apple.Safari" }.count == 1)
     }
 
+    @MainActor
+    @Test func applicationScanIncludesFinderVisibleMenuBarApps() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "LaunchpadX-AgentScan-\(UUID().uuidString)")
+        let app = root.appending(path: "Menu App.app")
+        let executable = app.appending(path: "Contents/MacOS/MenuApp")
+        try FileManager.default.createDirectory(at: executable.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let info: [String: Any] = [
+            "CFBundleIdentifier": "com.example.launchpadx.menuapp",
+            "CFBundleName": "Menu App",
+            "CFBundleExecutable": "MenuApp",
+            "CFBundlePackageType": "APPL",
+            "LSUIElement": true,
+        ]
+        let data = try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
+        try data.write(to: app.appending(path: "Contents/Info.plist"))
+        try Data("#!/bin/sh\nexit 0\n".utf8).write(to: executable)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let applications = await ApplicationDiscoveryService().scan(roots: [root])
+        #expect(applications.map { $0.bundleIdentifier }.contains("com.example.launchpadx.menuapp"))
+    }
+
+    @MainActor
+    @Test func systemLaunchersWithSameFinderNameAppearOnce() {
+        let applications = [
+            InstalledApplication(bundleIdentifier: "com.apple.siri.launcher", displayName: "Siri", bundleURL: URL(fileURLWithPath: "/System/Applications/Siri.app")),
+            InstalledApplication(bundleIdentifier: "com.apple.campo", displayName: "Siri", bundleURL: URL(fileURLWithPath: "/System/Applications/Siri AI.app")),
+        ]
+        let unique = ApplicationDiscoveryService.deduplicated(applications, currentApplicationURL: URL(fileURLWithPath: "/Applications/LaunchpadX.app"))
+        #expect(unique.count == 1)
+        #expect(unique[0].bundleURL.lastPathComponent == "Siri.app")
+    }
+
     @Test func narrowWindowReducesGridColumnsFor72PointIcons() {
         #expect(LauncherView.responsiveColumnCount(availableWidth: 956, iconSize: 72, requested: 7) == 7)
         #expect(LauncherView.responsiveColumnCount(availableWidth: 636, iconSize: 72, requested: 7) == 4)
