@@ -11,6 +11,7 @@ import CoreGraphics
 import Foundation
 import SwiftData
 import Testing
+import UniformTypeIdentifiers
 @testable import LaunchpadX
 
 struct LaunchpadXTests {
@@ -73,6 +74,75 @@ struct LaunchpadXTests {
     @Test func narrowWindowReducesGridColumnsFor72PointIcons() {
         #expect(LauncherView.responsiveColumnCount(availableWidth: 956, iconSize: 72, requested: 7) == 7)
         #expect(LauncherView.responsiveColumnCount(availableWidth: 636, iconSize: 72, requested: 7) == 4)
+    }
+
+    @MainActor
+    @Test func permanentUninstallerMatchesOnlyExactBundleIdentifierPaths() throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        let library = root.appending(path: "Library")
+        let bundleID = "com.example.fixture"
+        let matching = library.appending(path: "Application Support").appending(path: bundleID)
+        let unrelated = library.appending(path: "Application Support").appending(path: "com.example.fixture.other")
+        try FileManager.default.createDirectory(at: matching, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: unrelated, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let matches = PermanentUninstaller.matchingDataURLs(bundleIdentifier: bundleID, libraryURL: library)
+        #expect(matches == [matching.standardizedFileURL])
+        #expect(PermanentUninstaller.matchingDataURLs(bundleIdentifier: "../escape", libraryURL: library).isEmpty)
+    }
+
+    @MainActor
+    @Test func administratorUninstallScriptSafelyQuotesPaths() {
+        let appURL = URL(fileURLWithPath: "/Applications/Fixture's App.app")
+        let script = PermanentUninstaller.administratorRemovalScript(for: [appURL])
+        #expect(script.contains("with administrator privileges"))
+        #expect(script.contains("Fixture'\\\\''s App.app"))
+        #expect(!script.contains("'/Applications/Fixture's App.app'"))
+    }
+
+    @MainActor
+    @Test func permanentUninstallRemovesFixtureAndExactMatchingData() throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        let library = root.appending(path: "Library")
+        let bundleID = "com.example.fixture.uninstall"
+        let appURL = root.appending(path: "Fixture.app")
+        let matching = library.appending(path: "Caches").appending(path: bundleID)
+        let unrelated = library.appending(path: "Caches").appending(path: "com.example.fixture.uninstall.extra")
+        try FileManager.default.createDirectory(at: appURL, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: matching, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: unrelated, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let app = InstalledApplication(bundleIdentifier: bundleID, displayName: "Fixture", bundleURL: appURL)
+        try PermanentUninstaller.uninstall(app, includingMatchingData: true, libraryURL: library)
+
+        #expect(!FileManager.default.fileExists(atPath: appURL.path))
+        #expect(!FileManager.default.fileExists(atPath: matching.path))
+        #expect(FileManager.default.fileExists(atPath: unrelated.path))
+    }
+
+    @MainActor
+    @Test func applicationDragProviderAdvertisesInternalAndDockFileURLTypes() throws {
+        let container = try ModelContainer(
+            for: ApplicationRecord.self, LayoutItemRecord.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+        )
+        let model = LauncherViewModel(
+            repository: LayoutRepository(container: container), settings: SettingsStore(),
+            discovery: ApplicationDiscoveryService(), launcher: ApplicationLauncherService(),
+            icons: IconProvider(), searchIndex: SearchIndex()
+        )
+        model.loadForUITesting([
+            InstalledApplication(bundleIdentifier: "com.example.drag", displayName: "Drag Fixture",
+                                 bundleURL: URL(fileURLWithPath: "/Applications/Drag Fixture.app"))
+        ])
+        let entry = try #require(model.snapshot.entries.first)
+        let recordID = try #require(entry.applicationRecordID)
+        let provider = model.applicationDragProvider(recordID: recordID, entryID: entry.id)
+
+        #expect(provider.registeredTypeIdentifiers.contains("public.utf8-plain-text"))
+        #expect(provider.registeredTypeIdentifiers.contains(UTType.fileURL.identifier))
     }
 
     @MainActor

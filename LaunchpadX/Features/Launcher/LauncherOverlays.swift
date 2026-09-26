@@ -3,6 +3,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct SearchResultsView: View {
+    @Environment(\.colorScheme) private var colorScheme
     @Bindable var viewModel: LauncherViewModel
 
     var body: some View {
@@ -50,8 +51,8 @@ struct SearchResultsView: View {
             .padding(.horizontal, 22).padding(.vertical, 15)
         }
         .frame(width: 780, height: 570)
-        .background(.black.opacity(0.32), in: RoundedRectangle(cornerRadius: 28))
-        .glassEffect(.regular.tint(.white.opacity(0.08)), in: RoundedRectangle(cornerRadius: 28))
+        .background((colorScheme == .dark ? Color.black.opacity(0.32) : Color.white.opacity(0.56)), in: RoundedRectangle(cornerRadius: 28))
+        .glassEffect(.regular.tint(colorScheme == .dark ? .white.opacity(0.12) : .white.opacity(0.38)), in: RoundedRectangle(cornerRadius: 28))
         .shadow(color: .black.opacity(0.45), radius: 40, y: 16)
         .onKeyPress(characters: .decimalDigits, phases: .down) { press in
             guard press.modifiers.contains(.command), let index = Int(press.characters), index > 0,
@@ -63,6 +64,7 @@ struct SearchResultsView: View {
 }
 
 struct FolderOverlayView: View {
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var contrast
     @Bindable var viewModel: LauncherViewModel
@@ -78,7 +80,7 @@ struct FolderOverlayView: View {
                         .textFieldStyle(.plain)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 14).padding(.vertical, 7)
-                        .background(.white.opacity(0.14), in: Capsule())
+                        .background((colorScheme == .dark ? Color.white.opacity(0.14) : Color.black.opacity(0.08)), in: Capsule())
                         .frame(width: 260)
                         .focused($nameFocused)
                         .onSubmit { viewModel.saveFolderName(draftName) }
@@ -87,7 +89,7 @@ struct FolderOverlayView: View {
                 } else {
                     Text(folder.title)
                         .font(.system(size: 20, weight: .regular))
-                        .shadow(color: .black.opacity(0.7), radius: 2, y: 1)
+                        .shadow(color: colorScheme == .dark ? .black.opacity(0.7) : .clear, radius: 2, y: 1)
                         .padding(.horizontal, 18)
                         .padding(.vertical, 7)
                         .contentShape(Rectangle())
@@ -106,20 +108,23 @@ struct FolderOverlayView: View {
         }
         .padding(.horizontal, 54).padding(.vertical, 40)
         .frame(minWidth: 660, maxWidth: 800, minHeight: 360)
-        .foregroundStyle(.white)
+        .foregroundStyle(colorScheme == .dark ? Color.white : Color.primary)
         .background {
-            // Shadow only the panel shape, not a composited copy of every animated icon.
             RoundedRectangle(cornerRadius: 26, style: .continuous)
-                .fill(LinearGradient(
-                    colors: [Color(white: 0.16).opacity(reduceTransparency ? 1 : 0.94),
-                             Color(white: 0.08).opacity(reduceTransparency ? 1 : 0.90)],
-                    startPoint: .topLeading, endPoint: .bottomTrailing
-                ))
+                .fill(colorScheme == .dark
+                    ? Color(white: 0.10).opacity(reduceTransparency ? 0.98 : 0.34)
+                    : Color(white: 0.98).opacity(reduceTransparency ? 1 : 0.38))
+                .glassEffect(.regular.tint(colorScheme == .dark ? .white.opacity(0.06) : .white.opacity(0.14)), in: RoundedRectangle(cornerRadius: 26))
                 .shadow(color: .black.opacity(0.35), radius: 22, y: 12)
         }
         .overlay {
             RoundedRectangle(cornerRadius: 26, style: .continuous)
-                .stroke(.white.opacity(contrast == .increased ? 0.65 : 0.20), lineWidth: 1)
+                .stroke(
+                    colorScheme == .dark
+                        ? .white.opacity(contrast == .increased ? 0.65 : 0.24)
+                        : .black.opacity(contrast == .increased ? 0.42 : 0.14),
+                    lineWidth: 1
+                )
                 .allowsHitTesting(false)
         }
         .onDrop(
@@ -185,6 +190,8 @@ struct FolderOverlayView: View {
                             viewModel: viewModel
                         )
                     )
+            } else if viewModel.isOptionUninstallMode {
+                tile
             } else if viewModel.isMultiSelecting {
                 Button {
                     viewModel.toggleSelection(for: recordID)
@@ -208,27 +215,33 @@ struct FolderOverlayView: View {
                 .accessibilityIdentifier("folder.tile")
             }
         }
-        .overlay(alignment: .topTrailing) {
-            if viewModel.isOptionUninstallMode, application.canMoveToTrash {
+        .overlay(alignment: .topLeading) {
+            if viewModel.isOptionUninstallMode && application.canMoveToTrash {
                 Button { requestTrash(recordID) } label: {
-                    Image(systemName: "minus.circle.fill")
-                        .font(.system(size: 21, weight: .semibold))
-                        .symbolRenderingMode(.palette)
-                        .foregroundStyle(.white, .red)
-                        .shadow(color: .black.opacity(0.65), radius: 3, y: 1)
+                    Image(systemName: "minus")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(colorScheme == .dark ? .white : .black.opacity(0.78))
+                        .frame(width: 28, height: 28)
+                        .glassEffect(
+                            .regular.tint(colorScheme == .dark ? .white.opacity(0.28) : .white.opacity(0.66)),
+                            in: Circle()
+                        )
+                        .overlay(Circle().stroke(.white.opacity(colorScheme == .dark ? 0.48 : 0.82), lineWidth: 0.8))
+                        .shadow(color: .black.opacity(0.22), radius: 4, y: 1)
+                        .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel(String(localized: "Move to Trash"))
+                .offset(x: 5, y: -10)
+                .accessibilityLabel(String(localized: "Permanently Uninstall"))
                 .accessibilityValue(application.displayName)
                 .accessibilityIdentifier("folder.uninstall.\(recordID.uuidString)")
-                .padding(.top, 2)
-                .padding(.trailing, 12)
             }
         }
     }
 }
 
 private struct FolderApplicationTile: View {
+    @Environment(\.colorScheme) private var colorScheme
     let title: String
     let image: NSImage
     let editing: Bool
@@ -261,7 +274,7 @@ private struct FolderApplicationTile: View {
                 .font(.system(size: 12))
                 .lineLimit(1)
                 .frame(width: 112)
-                .shadow(color: .black.opacity(0.75), radius: 2, y: 1)
+                .shadow(color: colorScheme == .dark ? .black.opacity(0.75) : .clear, radius: 2, y: 1)
         }
     }
 }

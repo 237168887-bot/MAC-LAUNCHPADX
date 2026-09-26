@@ -13,29 +13,38 @@
   <img alt="macOS 26+" src="https://img.shields.io/badge/macOS-26%2B-111111?logo=apple">
   <img alt="Swift 6" src="https://img.shields.io/badge/Swift-6-orange?logo=swift">
   <a href="LICENSE"><img alt="GPL-3.0 license" src="https://img.shields.io/badge/License-GPL--3.0-blue.svg"></a>
+  <img alt="Free forever" src="https://img.shields.io/badge/Free-Forever-brightgreen">
 </p>
+
+**LaunchpadX 永久免费、开源。没有订阅、应用内购买或付费解锁；未来版本也会保持免费。**
+
+**LaunchpadX is free and open source forever.** No subscriptions, in-app purchases, or paid feature unlocks.
 
 LaunchpadX is an open-source macOS launcher built with SwiftUI and AppKit. It brings back a fast, familiar app grid with folders, search, gestures, and both full-screen and resizable window modes.
 
 LaunchpadX 是一款使用 SwiftUI 和 AppKit 开发的 macOS 开源启动器。它提供熟悉的应用网格、文件夹和快速搜索，并支持全屏与可调整大小的窗口模式。
 
-<p align="center">
-  <img src="docs/images/launchpadx-window.jpg" width="900" alt="LaunchpadX window mode with Liquid Glass appearance and app grid">
-</p>
+### 窗口模式 / Window mode
 
-**Development build:** 1.0 (Build 44) · **License:** GPL-3.0 · **Minimum system:** macOS 26
+![LaunchpadX 窗口模式](docs/images/launchpadx-window.png)
+
+### 全屏模式 / Full-screen mode
+
+![LaunchpadX 全屏模式](docs/images/launchpadx-full-screen.png)
+
+**Development build:** 1.0 (Build 45) · **License:** GPL-3.0 · **Minimum system:** macOS 26
 
 > This repository does not currently publish signed, notarized release binaries. Build the app with Xcode to try it.
 
 ## Features
 
-- **Two presentation modes:** a full-screen launcher or a resizable standard window, with a dark Liquid Glass appearance.
+- **Two presentation modes:** a full-screen launcher or a resizable window, both with adaptive Liquid Glass, a subtle glow, and readable light/dark folder borders.
 - **Flexible app grid:** switch between paged and vertically scrolling layouts; adjust icon size, rows, columns, and display selection.
-- **Fast search:** find apps by name, alias, bundle identifier, pinyin, or pinyin initials.
+- **Fast search:** an easy-to-reach search bar finds apps by name, alias, bundle identifier, pinyin, or pinyin initials.
 - **Folders and editing:** long-press to edit, drag to reorder apps, create folders, and move apps in or out of folders.
-- **App management:** rename or hide apps, add scan locations, select apps in batches, and move supported apps to Trash after confirmation.
+- **App management:** rename or hide apps, add scan locations, and select apps in batches. Context-menu and batch removal move apps to Trash. Holding Option reveals a glass-style remove control for confirmed permanent deletion of an eligible app, with an optional exact-match data cleanup choice.
 - **Shortcuts and gestures:** configure the global launch shortcut, page controls, trackpad swipes, F4, and optional hot corners.
-- **Menu bar and Dock:** choose how LaunchpadX appears in macOS and optionally start it at login.
+- **Menu bar and Dock:** drag app icons to the Dock, choose whether LaunchpadX appears in the menu bar, and optionally start it quietly at login.
 - **LaunchOS layout import:** optionally import matching app order, aliases, hidden state, and folders from the local LaunchOS database. The source data is read-only and retained.
 - **Low-overhead scanning:** monitor app directories for changes and refresh the index in the background.
 
@@ -52,12 +61,12 @@ cd MAC-LAUNCHPADX
 open LaunchpadX.xcodeproj
 ```
 
-Choose the `LaunchpadX` scheme in Xcode and run it. To build from Terminal:
+Choose the `LaunchpadX-Verification` scheme in Xcode and run it. To build from Terminal:
 
 ```bash
 xcodebuild build \
   -project LaunchpadX.xcodeproj \
-  -scheme LaunchpadX \
+  -scheme LaunchpadX-Verification \
   -configuration Release \
   -destination 'platform=macOS'
 ```

@@ -10,6 +10,40 @@ import XCTest
 
 final class LaunchpadXUITests: XCTestCase {
 
+    @MainActor
+    func testCaptureWindowModeShowcaseScreenshot() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--show-launcher-for-ui-testing", "--ui-testing-isolated-data", "--ui-testing-showcase", "--ui-testing-window-mode"]
+        app.launch()
+        app.activate()
+        let root = app.descendants(matching: .any).matching(identifier: "launcher.root").firstMatch
+        XCTAssertTrue(root.waitForExistence(timeout: 8))
+        let populatedGrid = XCTNSPredicateExpectation(predicate: NSPredicate(format: "count > 20"), object: app.buttons)
+        XCTAssertEqual(XCTWaiter.wait(for: [populatedGrid], timeout: 20), .completed, app.debugDescription)
+
+        let attachment = XCTAttachment(screenshot: app.windows.firstMatch.screenshot())
+        attachment.name = "LaunchpadX window mode"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
+    @MainActor
+    func testCaptureFullScreenModeShowcaseScreenshot() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--show-launcher-for-ui-testing", "--ui-testing-isolated-data", "--ui-testing-showcase"]
+        app.launch()
+        app.activate()
+        let root = app.descendants(matching: .any).matching(identifier: "launcher.root").firstMatch
+        XCTAssertTrue(root.waitForExistence(timeout: 8))
+        let populatedGrid = XCTNSPredicateExpectation(predicate: NSPredicate(format: "count > 20"), object: app.buttons)
+        XCTAssertEqual(XCTWaiter.wait(for: [populatedGrid], timeout: 20), .completed, app.debugDescription)
+
+        let attachment = XCTAttachment(screenshot: app.dialogs.firstMatch.screenshot())
+        attachment.name = "LaunchpadX full-screen mode"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
     private func waitForHittable(_ element: XCUIElement, expected: Bool, timeout: TimeInterval = 5) -> Bool {
         let predicate = NSPredicate(format: "hittable == %@", NSNumber(value: expected))
         return XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: element)], timeout: timeout) == .completed
@@ -243,7 +277,8 @@ final class LaunchpadXUITests: XCTestCase {
         ]
         app.launch()
         app.activate()
-        let folder = app.buttons["Fixture Folder"].firstMatch
+        let folder = app.descendants(matching: .any).matching(identifier: "launcher.tile")
+            .matching(NSPredicate(format: "label == %@", "Fixture Folder")).firstMatch
         XCTAssertTrue(folder.waitForExistence(timeout: 8))
         Thread.sleep(forTimeInterval: 1.8)
         let fullScreenHierarchy = app.debugDescription
@@ -531,6 +566,7 @@ final class LaunchpadXUITests: XCTestCase {
             "--ui-testing-isolated-data",
             "--ui-testing-fixtures",
             "--ui-testing-existing-folder",
+            "--ui-testing-open-folder",
             "--ui-testing-window-mode",
         ]
         app.launch()
@@ -785,7 +821,7 @@ final class LaunchpadXUITests: XCTestCase {
         let uninstallButton = app.buttons.matching(
             NSPredicate(format: "identifier BEGINSWITH %@", "uninstall.")
         ).firstMatch
-        XCTAssertTrue(uninstallButton.waitForExistence(timeout: 3))
+        XCTAssertTrue(uninstallButton.waitForExistence(timeout: 3), app.debugDescription)
     }
 
     @MainActor
@@ -806,11 +842,35 @@ final class LaunchpadXUITests: XCTestCase {
         ).firstMatch
         XCTAssertTrue(uninstallButton.waitForExistence(timeout: 8))
         uninstallButton.click()
-        let cancelButton = app.buttons["trash.cancel"]
+        let cancelButton = app.buttons["uninstall.cancel"]
         XCTAssertTrue(cancelButton.waitForExistence(timeout: 5), app.debugDescription)
         cancelButton.tap()
         XCTAssertTrue(uninstallButton.waitForExistence(timeout: 3))
         XCTAssertTrue(app.buttons["Fixture 0"].exists)
+    }
+
+    @MainActor
+    func testOptionUninstallControlIsAnchoredAtIconUpperLeft() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "--show-launcher-for-ui-testing", "--ui-testing-isolated-data",
+            "--ui-testing-fixtures", "--ui-testing-window-mode", "--ui-testing-option-held",
+        ]
+        app.launch()
+        let uninstallButton = app.buttons.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "uninstall.")
+        ).firstMatch
+        let tile = app.buttons["Fixture 0"].firstMatch
+        XCTAssertTrue(uninstallButton.waitForExistence(timeout: 8))
+        XCTAssertTrue(tile.exists)
+
+        let buttonFrame = uninstallButton.frame
+        let recordID = uninstallButton.identifier.replacingOccurrences(of: "uninstall.", with: "")
+        let icon = app.buttons["launcher.icon.\(recordID)"].firstMatch
+        XCTAssertTrue(icon.waitForExistence(timeout: 3), app.debugDescription)
+        let iconFrame = icon.frame
+        XCTAssertLessThan(abs(buttonFrame.midX - iconFrame.minX), 10)
+        XCTAssertLessThan(abs(buttonFrame.midY - iconFrame.minY), 10)
     }
 
     @MainActor
@@ -821,18 +881,16 @@ final class LaunchpadXUITests: XCTestCase {
             "--ui-testing-isolated-data",
             "--ui-testing-fixtures",
             "--ui-testing-existing-folder",
+            "--ui-testing-open-folder",
             "--ui-testing-window-mode",
             "--ui-testing-option-held",
         ]
         app.launch()
 
-        let folder = app.buttons["Fixture Folder"].firstMatch
-        XCTAssertTrue(folder.waitForExistence(timeout: 8))
-        folder.tap()
         let uninstallButton = app.buttons.matching(
             NSPredicate(format: "identifier BEGINSWITH %@", "folder.uninstall.")
         ).firstMatch
-        XCTAssertTrue(uninstallButton.waitForExistence(timeout: 3))
+        XCTAssertTrue(uninstallButton.waitForExistence(timeout: 3), app.debugDescription)
     }
 
     @MainActor

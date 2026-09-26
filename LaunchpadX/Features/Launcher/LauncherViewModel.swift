@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import Observation
+import UniformTypeIdentifiers
 
 @MainActor
 @Observable
@@ -832,9 +833,30 @@ final class LauncherViewModel {
 
     func folderDragProvider(recordID: UUID) -> NSItemProvider {
         guard isEditing else { return NSItemProvider() }
-        let provider = NSItemProvider(object: recordID.uuidString as NSString)
+        guard let application = snapshot.applications[recordID] else { return NSItemProvider() }
+        let provider = Self.applicationDragProvider(recordID: recordID, application: application)
         DispatchQueue.main.async { [weak self] in
             self?.beginFolderDragging(recordID: recordID)
+        }
+        return provider
+    }
+
+    func applicationDragProvider(recordID: UUID?, entryID: UUID) -> NSItemProvider {
+        guard let recordID, let application = snapshot.applications[recordID] else {
+            return NSItemProvider(object: entryID.uuidString as NSString)
+        }
+        return Self.applicationDragProvider(recordID: recordID, application: application)
+    }
+
+    private static func applicationDragProvider(recordID: UUID, application: InstalledApplication) -> NSItemProvider {
+        let provider = NSItemProvider(object: recordID.uuidString as NSString)
+        provider.registerFileRepresentation(
+            forTypeIdentifier: UTType.fileURL.identifier,
+            fileOptions: [],
+            visibility: .all
+        ) { completion in
+            completion(application.bundleURL, false, nil)
+            return nil
         }
         return provider
     }

@@ -30,7 +30,9 @@ struct InstalledApplication: Identifiable, Sendable, Hashable {
         bundleURL.standardizedFileURL.path.lowercased()
     }
 
-    nonisolated var canMoveToTrash: Bool { !isSystemApplication }
+    nonisolated var canMoveToTrash: Bool {
+        !isSystemApplication && !(bundleIdentifier?.lowercased().hasPrefix("com.apple.") ?? false)
+    }
 }
 
 enum LauncherEntryKind: String, Codable, Sendable {

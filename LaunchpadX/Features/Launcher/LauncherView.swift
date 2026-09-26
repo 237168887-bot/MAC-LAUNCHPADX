@@ -4,13 +4,16 @@ import UniformTypeIdentifiers
 
 struct LauncherView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
     @Bindable var viewModel: LauncherViewModel
     @Bindable var settings: SettingsStore
     let pointerRouter: LauncherPointerRouter
+    @State private var glassGlowPulse = false
     @FocusState private var searchFocused: Bool
     @State private var renameRecordID: UUID?
     @State private var renameDraft = ""
     @State private var pendingTrashRecordIDs: [UUID] = []
+    @State private var pendingUninstallRecordID: UUID?
     @State private var verticalGridTileFrames: [UUID: [CGRect]] = [:]
     @State private var searchGridTileFrames: [UUID: [CGRect]] = [:]
 
@@ -23,7 +26,11 @@ struct LauncherView: View {
     var body: some View {
         GeometryReader { viewport in
             ZStack {
-                LauncherBackgroundView()
+                LauncherBackgroundView(
+                    colorScheme: colorScheme,
+                    isFullScreen: settings.presentationMode == .fullScreen,
+                    glowPulse: glassGlowPulse
+                )
                 Color.clear
                     .contentShape(Rectangle())
                     .onTapGesture { handleBackgroundTap() }
@@ -31,6 +38,15 @@ struct LauncherView: View {
                     .frame(width: viewport.size.width, height: viewport.size.height, alignment: .top)
             }
             .frame(width: viewport.size.width, height: viewport.size.height)
+            .overlay {
+                if settings.presentationMode == .window {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(.white.opacity(glassGlowPulse ? 0.19 : 0.07), lineWidth: 1)
+                        .blur(radius: glassGlowPulse ? 5 : 2)
+                        .padding(1)
+                        .allowsHitTesting(false)
+                }
+            }
         }
         .overlayPreferenceValue(FolderSourceAnchorKey.self) { anchors in
             GeometryReader { proxy in
@@ -66,6 +82,14 @@ struct LauncherView: View {
             viewModel.handleEscapeKey()
             return .handled
         }
+        .task {
+            guard !reduceMotion else { return }
+            glassGlowPulse = true
+        }
+        .animation(
+            reduceMotion ? nil : .easeInOut(duration: 5).repeatForever(autoreverses: true),
+            value: glassGlowPulse
+        )
         .alert(String(localized: "LaunchpadX Error"), isPresented: Binding(
             get: { viewModel.errorMessage != nil },
             set: { if !$0 { viewModel.errorMessage = nil } }
@@ -84,25 +108,39 @@ struct LauncherView: View {
             }
         }
         .confirmationDialog(
-            String(localized: "Move selected applications to Trash?"),
+            activeConfirmationTitle,
             isPresented: Binding(
-                get: { !pendingTrashRecordIDs.isEmpty },
-                set: { if !$0 { pendingTrashRecordIDs = [] } }
+                get: { pendingUninstallRecordID != nil || !pendingTrashRecordIDs.isEmpty },
+                set: { if !$0 { pendingUninstallRecordID = nil; pendingTrashRecordIDs = [] } }
             ),
             titleVisibility: .visible
         ) {
-            Button(String(localized: "Move to Trash"), role: .destructive) {
-                let recordIDs = pendingTrashRecordIDs
-                pendingTrashRecordIDs = []
-                moveToTrash(recordIDs)
+            if pendingUninstallRecordID != nil {
+                Button(String(localized: "Permanently Delete App"), role: .destructive) {
+                    performPermanentUninstall(includingData: false)
+                }
+                if !pendingUninstallDataURLs.isEmpty {
+                    Button(String(localized: "Permanently Delete App and Matching Data"), role: .destructive) {
+                        performPermanentUninstall(includingData: true)
+                    }
+                }
+            } else {
+                Button(String(localized: "Move to Trash"), role: .destructive) {
+                    let recordIDs = pendingTrashRecordIDs
+                    pendingTrashRecordIDs = []
+                    moveToTrash(recordIDs)
+                }
+                .accessibilityIdentifier("trash.confirm")
             }
-            .accessibilityIdentifier("trash.confirm")
             Button(String(localized: "Cancel"), role: .cancel) {
+                pendingUninstallRecordID = nil
                 pendingTrashRecordIDs = []
             }
-            .accessibilityIdentifier("trash.cancel")
+            .accessibilityIdentifier(pendingUninstallRecordID != nil ? "uninstall.cancel" : "trash.cancel")
         } message: {
-            Text(String(localized: "These applications will be moved to the macOS Trash and can be restored from there. Application support data is left in place."))
+            Text(pendingUninstallRecordID != nil
+                ? pendingUninstallMessage
+                : String(localized: "These applications will be moved to the macOS Trash and can be restored from there. Application support data is left in place."))
         }
         .accessibilityIdentifier("launcher.root")
         .accessibilityValue(viewModel.isEditing ? "editing" : "normal")
@@ -123,7 +161,7 @@ struct LauncherView: View {
                     .transition(.opacity)
                     .zIndex(0)
                 FolderOverlayView(viewModel: viewModel, folder: folder) { recordID in
-                    requestTrash([recordID])
+                    requestPermanentUninstall(recordID)
                 }
                     .transition(reduceMotion ? .opacity : .scale(scale: 0.16)
                         .combined(with: .offset(x: origin.x - proxy.size.width / 2,
@@ -142,7 +180,7 @@ struct LauncherView: View {
     private var launcherCanvas: some View {
         VStack(spacing: 0) {
             searchField
-                .padding(.top, settings.presentationMode == .window ? 16 : 48)
+                .padding(.top, settings.presentationMode == .window ? 4 : 52)
                 .accessibilityIdentifier("launcher.search")
             if viewModel.isMultiSelecting {
                 selectionControls
@@ -171,7 +209,7 @@ struct LauncherView: View {
             }
         }
         .padding(.horizontal, 42)
-        .foregroundStyle(.white)
+        .foregroundStyle(colorScheme == .dark ? Color.white : Color.primary)
     }
 
     @ViewBuilder
@@ -247,13 +285,16 @@ struct LauncherView: View {
     }
 
     private var searchField: some View {
+        GeometryReader { geometry in
+        let isFullScreen = settings.presentationMode == .fullScreen
+        let fieldHeight: CGFloat = isFullScreen ? 50 : 44
         HStack(spacing: 9) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 15, weight: .medium))
-                .foregroundStyle(.white.opacity(0.68))
+                .font(.system(size: isFullScreen ? 17 : 15, weight: .medium))
+                .foregroundStyle(colorScheme == .dark ? .white.opacity(0.72) : .primary.opacity(0.68))
             TextField(String(localized: "Search applications"), text: $viewModel.searchQuery)
                 .textFieldStyle(.plain)
-                .font(.system(size: 16))
+                .font(.system(size: isFullScreen ? 18 : 16))
                 .focused($searchFocused)
                 .onSubmit { viewModel.launchSelectedSearchResult() }
                 .onKeyPress(.downArrow) { viewModel.moveSearchSelection(by: 1); return .handled }
@@ -261,16 +302,19 @@ struct LauncherView: View {
             if !viewModel.searchQuery.isEmpty {
                 Button { viewModel.searchQuery = "" } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.white.opacity(0.54))
+                        .foregroundStyle(colorScheme == .dark ? .white.opacity(0.58) : .primary.opacity(0.48))
                 }
                 .buttonStyle(.plain)
             }
         }
-        .padding(.horizontal, 14)
-        .frame(width: 380, height: 38)
-        .background(.black.opacity(0.26), in: Capsule())
-        .overlay(Capsule().stroke(.white.opacity(0.22), lineWidth: 0.5))
+        .padding(.horizontal, isFullScreen ? 17 : 14)
+        .frame(width: min(isFullScreen ? 620 : 540, geometry.size.width), height: fieldHeight)
+        .background(colorScheme == .dark ? .black.opacity(0.24) : .white.opacity(0.46), in: Capsule())
+        .overlay(Capsule().stroke(colorScheme == .dark ? .white.opacity(0.24) : .black.opacity(0.14), lineWidth: 0.6))
         .shadow(color: .black.opacity(0.22), radius: 8, y: 2)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .frame(height: settings.presentationMode == .fullScreen ? 50 : 44)
     }
 
     private var searchGrid: some View {
@@ -344,9 +388,16 @@ struct LauncherView: View {
             folderImages: entry.childApplicationRecordIDs.prefix(9).compactMap { viewModel.snapshot.applications[$0].map(viewModel.icon(for:)) },
             groupingImages: viewModel.groupingPreviewImages(for: entry),
             showsGroupingPreview: viewModel.groupingTargetID == entry.id,
+            dragProvider: { viewModel.applicationDragProvider(recordID: entry.applicationRecordID, entryID: entry.id) },
             iconSize: settings.iconSize,
             selected: entry.applicationRecordID.map(viewModel.selectedApplicationRecordIDs.contains) ?? false,
             editing: viewModel.isEditing && isActivePage,
+            showsUninstallControl: viewModel.isOptionUninstallMode
+                && entry.application?.canMoveToTrash == true
+                && entry.applicationRecordID != nil,
+            onUninstall: {
+                if let recordID = entry.applicationRecordID { requestPermanentUninstall(recordID) }
+            },
             onDragBegan: {
                 if !viewModel.isEditing { viewModel.beginEditing() }
                 viewModel.beginDraggingFromPress(entry)
@@ -360,38 +411,6 @@ struct LauncherView: View {
         }
         .opacity(isDraggedEntry ? 0.28 : 1)
         .contextMenu { contextMenu(for: entry) }
-        .overlay(alignment: .topTrailing) {
-            if viewModel.isOptionUninstallMode,
-               let application = entry.application,
-               application.canMoveToTrash,
-               let recordID = entry.applicationRecordID {
-                Button { requestTrash([recordID]) } label: {
-                    Image(systemName: "minus.circle.fill")
-                        .font(.system(size: 22, weight: .semibold))
-                        .symbolRenderingMode(.palette)
-                        .foregroundStyle(.white, .red)
-                        .shadow(color: .black.opacity(0.65), radius: 3, y: 1)
-                        .frame(width: 40, height: 40)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .background {
-                    GeometryReader { proxy in
-                        Color.clear.preference(
-                            key: LauncherTileFramePreferenceKey.self,
-                            value: [recordID: [proxy.frame(in: .global)]]
-                        )
-                    }
-                }
-                .accessibilityLabel(String(localized: "Move to Trash"))
-                .accessibilityValue(entry.title)
-                .accessibilityIdentifier("uninstall.\(entry.id.uuidString)")
-                .padding(.top, -4)
-                .padding(.trailing, 8)
-                .zIndex(10)
-            }
-        }
-
         tile
             .anchorPreference(key: FolderSourceAnchorKey.self, value: .bounds) { anchor in
                 entry.kind == .folder && isActivePage ? [entry.id: anchor] : [:]
@@ -444,6 +463,54 @@ struct LauncherView: View {
             return
         }
         pendingTrashRecordIDs = validIDs
+    }
+
+    private var pendingUninstallApplication: InstalledApplication? {
+        pendingUninstallRecordID.flatMap(viewModel.application(for:))
+    }
+
+    private var pendingUninstallTitle: String {
+        guard let app = pendingUninstallApplication else { return String(localized: "Permanently Uninstall Application?") }
+        return String(localized: "Permanently Uninstall \(app.displayName)?")
+    }
+
+    private var activeConfirmationTitle: String {
+        pendingUninstallRecordID != nil
+            ? pendingUninstallTitle
+            : String(localized: "Move selected applications to Trash?")
+    }
+
+    private var pendingUninstallDataURLs: [URL] {
+        guard let bundleID = pendingUninstallApplication?.bundleIdentifier else { return [] }
+        return PermanentUninstaller.matchingDataURLs(bundleIdentifier: bundleID)
+    }
+
+    private var pendingUninstallMessage: String {
+        let paths = pendingUninstallDataURLs.map(\.path)
+        guard !paths.isEmpty else {
+            return String(localized: "The selected action permanently deletes the application. No matching data was found in your Library.")
+        }
+        return String(localized: "Choose whether to permanently delete only the app or also these exact matching data items:\n\n\(paths.joined(separator: "\n"))")
+    }
+
+    private func requestPermanentUninstall(_ recordID: UUID) {
+        guard let application = viewModel.application(for: recordID), application.canMoveToTrash else { return }
+        pendingUninstallRecordID = recordID
+    }
+
+    private func performPermanentUninstall(includingData: Bool) {
+        guard let recordID = pendingUninstallRecordID,
+              let application = viewModel.application(for: recordID) else {
+            pendingUninstallRecordID = nil
+            return
+        }
+        pendingUninstallRecordID = nil
+        do {
+            try PermanentUninstaller.uninstall(application, includingMatchingData: includingData)
+            viewModel.removeApplication(recordID: recordID)
+        } catch {
+            viewModel.presentError(error)
+        }
     }
 
     private func moveToTrash(_ recordIDs: [UUID]) {
@@ -667,20 +734,25 @@ private struct LauncherTileFramePreferenceKey: PreferenceKey {
 }
 
 private struct AppTile: View {
+    @Environment(\.colorScheme) private var colorScheme
     let entry: LauncherEntry
     let image: NSImage?
     let folderImages: [NSImage]
     let groupingImages: [NSImage]
     let showsGroupingPreview: Bool
+    let dragProvider: () -> NSItemProvider
     let iconSize: Double
     let selected: Bool
     let editing: Bool
+    let showsUninstallControl: Bool
+    let onUninstall: () -> Void
     let onDragBegan: () -> Void
     let action: () -> Void
     let onLongPress: () -> Void
 
     var body: some View {
         tileContent
+        .accessibilityElement(children: .contain)
         .fixedSize()
         .rotationEffect(.degrees(editing ? wiggleAngle : 0))
         .animation(.spring(response: 0.24, dampingFraction: 0.82), value: showsGroupingPreview)
@@ -695,43 +767,76 @@ private struct AppTile: View {
 
     private var tileContent: some View {
         VStack(spacing: 7) {
-            interactive(ZStack {
-                if entry.kind == .folder {
-                    FolderPreview(images: folderImages, size: iconSize)
-                } else {
-                    Image(nsImage: image ?? NSImage())
-                        .resizable()
-                        .interpolation(.high)
-                        .scaledToFit()
-                }
+            ZStack(alignment: .topLeading) {
+                interactive(ZStack {
+                    if entry.kind == .folder {
+                        FolderPreview(images: folderImages, size: iconSize)
+                    } else {
+                        Image(nsImage: image ?? NSImage())
+                            .resizable()
+                            .interpolation(.high)
+                            .scaledToFit()
+                    }
 
-                if showsGroupingPreview {
-                    FolderPreview(images: groupingImages, size: iconSize)
-                        .transition(.scale(scale: 0.82).combined(with: .opacity))
+                    if showsGroupingPreview {
+                        FolderPreview(images: groupingImages, size: iconSize)
+                            .transition(.scale(scale: 0.82).combined(with: .opacity))
+                    }
+                    if selected {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 22, weight: .semibold))
+                            .foregroundStyle(.white, Color.accentColor)
+                            .shadow(color: .black.opacity(0.3), radius: 4, y: 2)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                            .padding(3)
+                    }
                 }
-                if selected {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 22, weight: .semibold))
-                        .foregroundStyle(.white, Color.accentColor)
-                        .shadow(color: .black.opacity(0.3), radius: 4, y: 2)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                        .padding(3)
+                .frame(width: iconSize, height: iconSize))
+                .accessibilityIdentifier("launcher.icon.\(entry.id.uuidString)")
+                .compositingGroup()
+                .background {
+                    GeometryReader { proxy in
+                        Color.clear.preference(
+                            key: LauncherTileFramePreferenceKey.self,
+                            value: [entry.id: [proxy.frame(in: .global)]]
+                        )
+                    }
+                }
+                if showsUninstallControl, let recordID = entry.applicationRecordID {
+                    Button(action: onUninstall) {
+                        Image(systemName: "minus")
+                            .font(.system(size: 13, weight: .bold))
+                            .foregroundStyle(colorScheme == .dark ? .white : .black.opacity(0.78))
+                            .frame(width: 28, height: 28)
+                            .glassEffect(
+                                .regular.tint(colorScheme == .dark ? .white.opacity(0.28) : .white.opacity(0.66)),
+                                in: Circle()
+                            )
+                            .overlay(Circle().stroke(.white.opacity(colorScheme == .dark ? 0.48 : 0.82), lineWidth: 0.8))
+                            .shadow(color: .black.opacity(0.22), radius: 4, y: 1)
+                            .contentShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .offset(x: -10, y: -10)
+                    .background {
+                        GeometryReader { proxy in
+                            Color.clear.preference(
+                                key: LauncherTileFramePreferenceKey.self,
+                                value: [recordID: [proxy.frame(in: .global)]]
+                            )
+                        }
+                    }
+                    .accessibilityLabel(String(localized: "Permanently Uninstall"))
+                    .accessibilityValue(entry.title)
+                    .accessibilityIdentifier("uninstall.\(entry.id.uuidString)")
+                    .zIndex(10)
                 }
             }
-            .frame(width: iconSize, height: iconSize))
-            .compositingGroup()
-            .background {
-                GeometryReader { proxy in
-                    Color.clear.preference(
-                        key: LauncherTileFramePreferenceKey.self,
-                        value: [entry.id: [proxy.frame(in: .global)]]
-                    )
-                }
-            }
+            .frame(width: iconSize, height: iconSize)
             interactive(Text(entry.title)
                 .font(.system(size: 12, weight: .regular))
                 .lineLimit(1)
-                .shadow(color: .black.opacity(0.85), radius: 2, y: 1)
+                .shadow(color: colorScheme == .dark ? .black.opacity(0.85) : .clear, radius: 2, y: 1)
                 .frame(width: visibleTitleWidth)
                 .background {
                     GeometryReader { proxy in
@@ -753,9 +858,13 @@ private struct AppTile: View {
 
     @ViewBuilder
     private func interactive<Content: View>(_ content: Content) -> some View {
-        let dragSource = content.contentShape(Rectangle()).onDrag {
+        let dragSource = Button(action: action) {
+            content.contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onDrag {
                 onDragBegan()
-                return NSItemProvider(object: entry.id.uuidString as NSString)
+                return dragProvider()
             } preview: {
                 Image(nsImage: image ?? folderImages.first ?? NSImage())
                     .resizable()
@@ -763,10 +872,9 @@ private struct AppTile: View {
                     .frame(width: iconSize, height: iconSize)
             }
         if editing {
-            dragSource.onTapGesture(perform: action)
+            dragSource
         } else {
-            dragSource.onTapGesture(perform: action)
-                .onLongPressGesture(minimumDuration: LaunchpadTheme.editingLongPressDuration) {
+            dragSource.onLongPressGesture(minimumDuration: LaunchpadTheme.editingLongPressDuration) {
                 onLongPress()
             }
         }
@@ -838,17 +946,19 @@ private struct SearchResultTile: View {
 }
 
 private struct FolderPreview: View {
+    @Environment(\.colorScheme) private var colorScheme
     let images: [NSImage]
     let size: Double
 
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: size * 0.20, style: .continuous)
-                .fill(.white.opacity(0.20))
+                .fill(colorScheme == .dark ? .white.opacity(0.11) : .white.opacity(0.72))
                 .overlay {
                     RoundedRectangle(cornerRadius: size * 0.20, style: .continuous)
-                        .stroke(.white.opacity(0.20), lineWidth: 0.5)
+                        .stroke(colorScheme == .dark ? .white.opacity(0.24) : .black.opacity(0.12), lineWidth: 0.7)
                 }
+                .shadow(color: colorScheme == .dark ? .black.opacity(0.18) : .black.opacity(0.10), radius: 2, y: 1)
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 3), count: 3), spacing: 3) {
                 ForEach(Array(images.prefix(9).enumerated()), id: \.offset) { _, image in
                     Image(nsImage: image).resizable().scaledToFit()
@@ -939,12 +1049,39 @@ private struct LauncherGridBackgroundDropDelegate: DropDelegate {
 }
 
 private struct LauncherBackgroundView: View {
+    let colorScheme: ColorScheme
+    let isFullScreen: Bool
+    let glowPulse: Bool
+
     var body: some View {
         Rectangle()
             .fill(.clear)
-            .glassEffect(.regular.tint(.white.opacity(0.16)), in: Rectangle())
-            .overlay { Rectangle().fill(.black.opacity(0.08)) }
-            .overlay { Rectangle().fill(.white.opacity(0.12)) }
+            .glassEffect(.regular.tint(colorScheme == .dark ? .white.opacity(0.12) : .white.opacity(0.19)), in: Rectangle())
+            .overlay {
+                Rectangle().fill(
+                    LinearGradient(
+                        colors: [.white.opacity(colorScheme == .dark ? 0.08 : 0.12), .clear, .white.opacity(0.025)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+            }
+            .overlay {
+                if isFullScreen {
+                    Rectangle().fill(
+                        RadialGradient(
+                            colors: [
+                                .white.opacity(glowPulse ? 0.075 : 0.025),
+                                Color.cyan.opacity(glowPulse ? 0.025 : 0.008),
+                                .clear
+                            ],
+                            center: .topLeading,
+                            startRadius: 8,
+                            endRadius: 720
+                        )
+                    )
+                }
+            }
             .ignoresSafeArea()
     }
 }

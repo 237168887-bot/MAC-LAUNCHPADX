@@ -126,10 +126,21 @@ final class AppEnvironment {
                     ) {
                         try repository.renameFolder(id: folderID, name: "Fixture Folder")
                         try launcherViewModel.reloadSnapshot()
+                        if ProcessInfo.processInfo.arguments.contains("--ui-testing-open-folder"),
+                           let folder = launcherViewModel.snapshot.entries.first(where: { $0.id == folderID }) {
+                            launcherViewModel.open(folder)
+                        }
                     }
                 } catch {
                     launcherViewModel.presentError(error)
                 }
+            }
+            return
+        }
+        if ProcessInfo.processInfo.arguments.contains("--ui-testing-showcase") {
+            Task {
+                let applications = await discovery.scan(roots: settings.allScanRoots)
+                launcherViewModel.applyScanResults(applications)
             }
             return
         }
